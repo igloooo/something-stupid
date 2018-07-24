@@ -75,7 +75,7 @@ class SZONowcastingFactory(EncoderForecasterBaseFactory):
         """
         # transform the layout to (batch_size, channels, seq_len, height, width)
         video = mx.symbol.transpose(video, axes=(1, 2, 0, 3, 4))
-        num_layers = len(cfg.DISCRIM_CONV) 
+        num_layers = len(cfg.MODEL.DISCRIMINATOR.DISCRIM_CONV) 
         for i in range(num_layers):
             if i==0:
                 inputs = video
@@ -91,15 +91,16 @@ class SZONowcastingFactory(EncoderForecasterBaseFactory):
             # another conv3d will serve as pooling layer
             if i<num_layers-1:
                 output = conv3d_act(data=output,
-                                    num_filter=cfg.MODEL.DISCRIMINATOR.DIRCRIM_POOL[i]['num_filter'],
+                                    num_filter=cfg.MODEL.DISCRIMINATOR.DISCRIM_POOL[i]['num_filter'],
                                     kernel=cfg.MODEL.DISCRIMINATOR.DISCRIM_POOL[i]['kernel'],
                                     stride=cfg.MODEL.DISCRIMINATOR.DISCRIM_POOL[i]['stride'],
                                     pad=cfg.MODEL.DISCRIMINATOR.DISCRIM_POOL[i]['padding'],
                                     act_type=cfg.MODEL.CNN_ACT_TYPE,
                                     name='discrim_pool'+str(i))
-                output = fc_layer(data=output.reshape([cfg.MODEL.TRAIN.BATCH_SIZE， -1]),
-                                num_hidden=1,
-                                name='discrim_fc')
+        output = fc_layer(data=output.reshape([self._batch_size, -1]),
+                        num_hidden=1,
+                        name='discrim_fc')
+        output = output.reshape([self._batch_size,])
         return output 
 
     def loss_sym(self,
@@ -120,7 +121,7 @@ class SZONowcastingFactory(EncoderForecasterBaseFactory):
         mae = weighted_mae(pred=pred, gt=target, weight=weights)
         gdl = masked_gdl_loss(pred=pred, gt=target, mask=mask)
         # gan loss is for a whole sequence, and isn't influenced by weights
-        gan = mx.sym.square(mx.sym.broadcast_add(discrim_output, -1))
+        gan = mx.sym.square(mx.sym.broadcast_add(discrim_output, -mx.sym.ones([1])))
         avg_mse = mx.sym.mean(mse)
         avg_mae = mx.sym.mean(mae)
         avg_gdl = mx.sym.mean(gdl)
@@ -159,6 +160,7 @@ class SZONowcastingFactory(EncoderForecasterBaseFactory):
                 label=mx.sym.Variable('discrim_label')):
         discrim_loss = mx.sym.square(mx.sym.broadcast_add(discrim_output, -label))
         avg_discrim_loss = mx.sym.mean(discrim_loss)
+        global_grad_scale = cfg.MODEL.NORMAL_LOSS_GLOBAL_SCALE
         if cfg.MODEL.GAN_D_LAMBDA > 0:
             avg_discrim_loss = mx.sym.MakeLoss(avg_discrim_loss,
                                                 grad_scale=global_grad_scale*cfg.MODEL.GAN_D_LAMBDA,

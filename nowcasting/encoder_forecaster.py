@@ -301,8 +301,7 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
                                     layout="NCHW"))
         return ret
 
-    def loss_sym(self):
-        raise NotImplementedError
+
 
     def discriminator(self):
         raise NotImplementedError
@@ -321,7 +320,7 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
                                   layout="TNCHW"))
         return ret
 
-    def loss_sym_D(self):
+    def loss_sym(self):
         raise NotImplementedError
 
     def loss_data_desc(self):
@@ -333,6 +332,10 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
                                          self._height,
                                          self._width),
                                   layout="TNCHW"))
+
+        ret.append(mx.io.DataDesc(name='discrim_out',
+                                  shape=(self._ctx_num * self._batch_size,),
+                                  layout="N"))
         return ret
 
     def loss_label_desc(self):
@@ -353,9 +356,6 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
                                              self._width),
                                       layout="TNCHW"))
 
-        ret.append(mx.io.DataDesc(name='discrim_out',
-                                  shape=(self._ctx_num * self._batch_size,),
-                                  layout="N")
         return ret
 
     def loss_D_sym(self):
@@ -365,14 +365,14 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
         ret = list()
         ret.append(mx.io.DataDesc(name='discrim_out',
                                   shape=(self._ctx_num * self._batch_size,),
-                                  layout="N")
+                                  layout="N"))
         return ret
     
     def loss_D_label_desc(self):
         ret = list()
         ret.append(mx.io.DataDesc(name='discrim_label',
                                   shape=(self._ctx_num * self._batch_size,),
-                                  layout="N")
+                                  layout="N"))
         return ret
     
 
@@ -514,7 +514,7 @@ def encoder_forecaster_build_networks(factory, context,
                     inputs_need_grad=True,
                     shared_module=None)
     discrim_net.init_params(mx.init.MSRAPrelu(slope=0.2))
-    init_optimizer_using_cfg(discrim_net, for_finetune=for_finetue)
+    init_optimizer_using_cfg(discrim_net, for_finetune=for_finetune)
 
     loss_D_net = MyModule(factory.loss_D_sym(),
                         data_names=[ele.name for ele in
@@ -522,7 +522,7 @@ def encoder_forecaster_build_networks(factory, context,
                         label_names=[ele.name for ele in
                                      factory.loss_D_label_desc()],
                         context=context,
-                        name="loss_D_net"))
+                        name="loss_D_net")
     loss_D_net.bind(data_shapes=factory.loss_D_data_desc(),
                     label_shapes=factory.loss_D_label_desc(),
                     inputs_need_grad=True,
@@ -607,29 +607,32 @@ def train_step(batch_size, encoder_net, forecaster_net,
                             data_batch=mx.io.DataBatch(data=init_states.get_forecaster_states()))
     forecaster_outputs = forecaster_net.get_outputs()
     pred_nd = forecaster_outputs[0]
-
-    discrim_output = discrim_net.forward(is_train=True,
-                                        data_batch=mx.io.DataBatch(data=[pred_nd]))
-
+    
+    discrim_net.forward(is_train=True,
+                        data_batch=mx.io.DataBatch(data=[pred_nd]))
+    discrim_output = discrim_net.get_outputs()[0]
+    
     # Calculate the gradient of the loss functions
     if cfg.MODEL.ENCODER_FORECASTER.HAS_MASK:
-        loss_net.forward_backward(data_batch=mx.io.DataBatch(data=[pred_nd],
-                                                             label=[gt_nd, mask_nd, discrim_output]))
+        loss_net.forward_backward(data_batch=mx.io.DataBatch(data=[pred_nd, discrim_output],
+                                                             label=[gt_nd, mask_nd]))
     else:
-        loss_net.forward_backward(data_batch=mx.io.DataBatch(data=[pred_nd],
-                                                             label=[gt_nd, discrim_output]))
-    pred_grad = loss_net.get_input_grads()[0]
+        loss_net.forward_backward(data_batch=mx.io.DataBatch(data=[pred_nd, discrim_output],
+                                                             label=[gt_nd]))
+    
+    pred_grad_ordinary = loss_net.get_input_grads()[0]
+    discrim_net.backward(out_grads=[loss_net.get_input_grads()[1]])
+    pred_grad_gan = discrim_net.get_input_grads()[0]
+    pred_grad = pred_grad_ordinary + pred_grad_gan  # add up gradients computed from different path with respect to pred
+
     loss_dict = loss_net.get_output_dict()
     for k in loss_dict:
         loss_dict[k] = nd.mean(loss_dict[k]).asscalar()
     # Backward Forecaster
     forecaster_net.backward(out_grads=[pred_grad])
-    #if cfg.MODEL.OUT_TYPE == "direct":
-    #    encoder_states_grad_nd = forecaster_net.get_input_grads()
-    #else:
-    encoder_states_grad_nd = forecaster_net.get_input_grads()[:-1]
+    encoder_states_grad_nd = forecaster_net.get_input_grads()
     # Backward Encoder
-    encoder_net.backward(encoder_states_grad_nd)
+    encoder_net.backward(out_grads=encoder_states_grad_nd)
     # Update forecaster and encoder
     forecaster_grad_norm = forecaster_net.clip_by_global_norm(max_norm=cfg.MODEL.TRAIN.GRAD_CLIP)
     encoder_grad_norm = encoder_net.clip_by_global_norm(max_norm=cfg.MODEL.TRAIN.GRAD_CLIP)
@@ -638,22 +641,23 @@ def train_step(batch_size, encoder_net, forecaster_net,
     
     # train the discriminator
     dis_loss = 0.0
-    label = mx.nd.zeros([1])
+    label = mx.nd.zeros_like(discrim_output)
     # fake data
     loss_D_net.forward_backward(data_batch=mx.io.DataBatch(data=[discrim_output],
-                                                            label=[label])
-    dis_loss += mx.nd.mean(loss_D_net.get_ouptut_dict()['dis']).asscalar()
+                                                            label=[label]))
+    dis_loss += mx.nd.mean(loss_D_net.get_output_dict()['dis_output']).asscalar()
     fake_grad = loss_D_net.get_input_grads()[0]
-    discrim_net.backward(out_grad=[fake_grad])
+    discrim_net.backward(out_grads=[fake_grad])
     temp_grad = [[grad.copyto(grad.context) for grad in grads] for grads in discrim_net._exec_group.grad_arrays]
     # true data
     label[:] = 1
-    discrim_output = discrim_net.forward(data_barch=mx.io.DataBatch(data=[gt_nd]))
+    discrim_net.forward(data_batch=mx.io.DataBatch(data=[gt_nd]))
+    discrim_output = discrim_net.get_outputs()[0]
     loss_D_net.forward_backward(data_batch=mx.io.DataBatch(data=[discrim_output],
-                                                            label=[label])
-    dis_loss += mx.nd.mean(loss_D_net.get_ouptut_dict()['dis']).asscalar()
+                                                            label=[label]))
+    dis_loss += mx.nd.mean(loss_D_net.get_output_dict()['dis_output']).asscalar()
     true_grad = loss_D_net.get_input_grads()[0]
-    discrim_net.backward(out_grad=[true_grad])
+    discrim_net.backward(out_grads=[true_grad])
     # add them up
     for gradsr, gradsf in zip(discrim_net._exec_group.grad_arrays, temp_grad):
         for gradr, gradf in zip(gradsr, gradsf):

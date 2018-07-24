@@ -71,6 +71,7 @@ class MyModule(Module):
                                        fixed_param_names=fixed_param_names,
                                        state_names=state_names)
         self._tmp_grads = None
+        # dictionaries of lists of (length, 1) matrices
         self.us = {}
         self.vs = {}
 
@@ -78,24 +79,28 @@ class MyModule(Module):
         def l2normalize(v, eps=10**(-10)):
             return v / (mx.nd.norm(v)+eps)
         def power_iteration(u, v, w_reshaped):
-            v = mx.nd.linalg.gemm2(w_reshaped, u)
+            v = mx.nd.linalg_gemm2(w_reshaped, u)
             v = l2normalize(v)
-            u = mx.nd.linalg.gemm2(w_reshaped, v, transpose_a=True)
+            u = mx.nd.linalg_gemm2(w_reshaped, v, transpose_a=True)
             u = l2normalize(u)
             return u, v
-        for k, w in zip(self._param_names, self._exec_group.param_arrays):
-            w_reshaped = w.reshape([w.shape()[0], -1])
-            if self.us == {}:
-                u = l2normalize(mx.nd.random.uniform(shape=w_reshaped.shape()[1]))
-                v = None
-            else:
-                u = self.us[k]
-                v = self.vs[k]
-            u, v = power_iteration(u, None, w_reshaped)
-            self.us[k] = u
-            self.vs[k] = v
-            sigma = mx.nd.gemm2(v, mx.nd.gemm2(w_reshaped, u), transpose_a=True)
-            w = w / sigma
+        for k, ws_for_ctxs in zip(self._exec_group.param_names, self._exec_group.param_arrays):
+            self.us[k] = []
+            self.vs[k] = []
+            for i, w in enumerate(ws_for_ctxs):
+                w_reshaped = w.reshape([w.shape[0], -1])
+                if len(self.us[k]) < 2:
+                    u = l2normalize(mx.nd.random.uniform(shape=(w_reshaped.shape[1], 1), ctx=w.context))
+                    v = None
+                    self.us[k].append(u)
+                    self.vs[k].append(v)
+                u = self.us[k][i]
+                v = self.vs[k][i]
+                u, v = power_iteration(u, None, w_reshaped)
+                self.us[k][i] = u
+                self.vs[k][i] = v
+                sigma = mx.nd.linalg_gemm2(v, mx.nd.linalg_gemm2(w_reshaped, u), transpose_a=True)
+                w = w / sigma
 
     def clip_by_global_norm(self, max_norm=1.0):
         """Clips gradient norm.
@@ -157,14 +162,14 @@ class MyModule(Module):
 
     def debug_norm_all(self, debug_gnorm=True):
         if debug_gnorm:
-            for k, v, grad_v in zip(self._param_names, self._exec_group.param_arrays,
+            for k, v, grad_v in zip(self._exec_group.param_names, self._exec_group.param_arrays,
                                     self._exec_group.grad_arrays):
                 logging.debug("%s: v-norm: %g, g-norm: %g"
                               %(k,
                                 nd.norm(v[0]).asnumpy()[0],
                                 nd.norm(grad_v[0]).asnumpy()[0]))
         else:
-            for k, v in zip(self._param_names, self._exec_group.param_arrays):
+            for k, v in zip(self._exec_group.param_names, self._exec_group.param_arrays):
                 logging.debug("%s: v-norm: %g"
                               %(k,
                                 nd.norm(v[0]).asnumpy()[0]))

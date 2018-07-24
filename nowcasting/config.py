@@ -215,14 +215,14 @@ __C.MODEL.ENCODER_FORECASTER.RNN_BLOCKS.I2H_PAD = [(1, 1), (1, 1), (1, 1)]
 __C.MODEL.ENCODER_FORECASTER.RNN_BLOCKS.L = [5, 5, 5]
 
 __C.MODEL.DISCRIMINATOR = edict()
-__C.MODEL.DISCRIMINATOR.FEATMAP_SIZE = [(20, 500), (10, 250), (5, 125), (2, 62)]
-__C.MODEL.DISCRIMINATOR.DISCRIM_CONV: [{'num_filter':32, 'kernel':(3, 3, 3), 'stride':(1, 1, 1),'padding':(1, 1, 1)},
-                                        {'num_filter':64, 'kernel':(3, 3, 3), 'stride':(1, 1, 1),'padding':(1, 1, 1)},
-                                        {'num_filter':128, 'kernel':(3, 3, 3), 'stride':(1, 1, 1),'padding':(1, 1, 1)},
-                                        {'num_filter':192, 'kernel':(3, 3, 3), 'stride':(1, 1, 1),'padding':(1, 1, 1)}]
-__C.MODEL.DISCRIMINATOR.DISCRIM_POOL: [{'num_filter':32, 'kernel':(4, 4, 4), 'stride':(2, 2, 2),'padding':(2, 2, 2)},
-                                        {'num_filter':64, 'kernel':(4, 4, 4), 'stride':(2, 2, 2),'padding':(2, 2, 2)},
-                                        {'num_filter':128, 'kernel':(3, 3, 3), 'stride':(2, 2, 2),'padding':(0, 0, 0)}]
+__C.MODEL.DISCRIMINATOR.FEATMAP_SIZE = [[20, 500], [10, 250], [5, 125], [2, 62]]
+__C.MODEL.DISCRIMINATOR.DISCRIM_CONV = [edict({'num_filter':32, 'kernel':[3, 3, 3], 'stride':[1, 1, 1],'padding':[1, 1, 1]}),
+                                        edict({'num_filter':64, 'kernel':[3, 3, 3], 'stride':[1, 1, 1],'padding':[1, 1, 1]}),
+                                        edict({'num_filter':128, 'kernel':[3, 3, 3], 'stride':[1, 1, 1],'padding':[1, 1, 1]}),
+                                        edict({'num_filter':192, 'kernel':[3, 3, 3], 'stride':[1, 1, 1],'padding':[1, 1, 1]})]
+__C.MODEL.DISCRIMINATOR.DISCRIM_POOL = [edict({'num_filter':32, 'kernel':[4, 4, 4], 'stride':[2, 2, 2],'padding':[2, 2, 2]}),
+                                       edict({'num_filter':64, 'kernel':[4, 4, 4], 'stride':[2, 2, 2],'padding':[2, 2, 2]}),
+                                       edict({'num_filter':128, 'kernel':[3, 3, 3], 'stride':[2, 2, 2],'padding':[0, 0, 0]})]
 
 __C.MODEL.DECONVBASELINE = edict()
 __C.MODEL.DECONVBASELINE.BASE_NUM_FILTER = 16

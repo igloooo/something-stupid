@@ -15,7 +15,7 @@ import matplotlib.ticker as ticker
 from szo_factory import SZONowcastingFactory
 from nowcasting.config import cfg, cfg_from_file, save_cfg
 from nowcasting.my_module import MyModule
-from nowcasting.encoder_forecaster import encoder_forecaster_build_networks, train_step, EncoderForecasterStates, load_encoder_forecaster_params
+from nowcasting.encoder_forecaster import encoder_forecaster_build_networks, train_step, EncoderForecasterStates
 from nowcasting.szo_evaluation import *
 from nowcasting.utils import parse_ctx, logging_config, latest_iter_id
 from nowcasting.szo_iterator import SZOIterator, save_png_sequence
@@ -225,7 +225,7 @@ def train(args):
 
     total_mse_loss = 0.0
     total_gdl_loss = 0.0
-    total_gan_loos = 0.0
+    total_gan_loss = 0.0
 
     iter_id = start_iter_id
     while iter_id < cfg.MODEL.TRAIN.MAX_ITER:
@@ -268,16 +268,17 @@ def train(args):
         total_gdl_loss += loss_dict['gdl_output']
         total_gan_loss += loss_dict['gan_output']
 
-        if (iter_id+1) % cfg.MODEL.VALID_ITER == 0:
+        if (iter_id) % cfg.MODEL.VALID_ITER == 0:
             frame_dat_v = valid_szo_iter.sample()
             data_nd_v = frame_dat_v[0:cfg.MODEL.IN_LEN,:,:,:,:] / 255.0
             gt_nd_v = frame_dat_v[cfg.MODEL.IN_LEN:(cfg.MODEL.IN_LEN+cfg.MODEL.OUT_LEN),:,:,:,:] / 255.0
             mask_nd_v = mx.nd.ones_like(gt_nd_v)
             states.reset_all()
             pred_nd_v = get_prediction(data_nd_v, states, encoder_net, forecaster_net)
-            discrim_output = discrim_net.forward(data_batch=mx.io.DataBatch(data=[pred_nd_v]))
-            loss_net.forward(data_batch=mx.io.DataBatch(data=[pred_nd_v],
-                                                        label=[gt_nd_v, mask_nd_v, discrim_output]))
+            discrim_net.forward(data_batch=mx.io.DataBatch(data=[pred_nd_v]))
+            discrim_output = discrim_net.get_outputs()[0]
+            loss_net.forward(data_batch=mx.io.DataBatch(data=[pred_nd_v, discrim_output],
+                                                        label=[gt_nd_v, mask_nd_v]))
             loss_v_mse = mx.nd.mean(loss_net.get_output_dict()['mse_output']).asscalar()
             loss_v_gdl = mx.nd.mean(loss_net.get_output_dict()['gdl_output']).asscalar()
             loss_v_gan = mx.nd.mean(loss_net.get_output_dict()['gan_output']).asscalar()
@@ -289,7 +290,7 @@ def train(args):
             plot_loss_curve(os.path.join(base_dir, 'valid_gdl_loss'), valid_gdl_losses)
             plot_loss_curve(os.path.join(base_dir, 'valid_gan_loss'), valid_gan_losses)
             
-        if (iter_id+1) % cfg.MODEL.DRAW_EVERY == 0:
+        if (iter_id) % cfg.MODEL.DRAW_EVERY == 0:
             train_mse_losses.append(total_mse_loss / cfg.MODEL.DRAW_EVERY)
             train_gdl_losses.append(total_gdl_loss / cfg.MODEL.DRAW_EVERY)
             train_gan_losses.append(total_gan_loss / cfg.MODEL.DRAW_EVERY)
@@ -300,7 +301,7 @@ def train(args):
             total_gdl_loss = 0.0
             total_gan_loss = 0.0
 
-        if (iter_id+1) % cfg.MODEL.DISPLAY_EVERY == 0:
+        if (iter_id) % cfg.MODEL.DISPLAY_EVERY == 0:
             new_frame_dat = train_szo_iter.sample()
             data_nd = new_frame_dat[0:cfg.MODEL.IN_LEN,:,:,:,:] / 255.0
             target_nd = new_frame_dat[cfg.MODEL.IN_LEN:(cfg.MODEL.IN_LEN+cfg.MODEL.OUT_LEN),:,:,:,:] / 255.0
@@ -336,7 +337,7 @@ def train(args):
                               'valid_mse':valid_mse_losses, 'valid_gdl':valid_gdl_losses}
                 pickle.dump(loss_dicts, f)
         '''
-        if (iter_id+1) % cfg.MODEL.SAVE_ITER == 0:
+        if (iter_id) % cfg.MODEL.SAVE_ITER == 0:
             encoder_net.save_checkpoint(
                 prefix=os.path.join(base_dir, "encoder_net",),
                 epoch=iter_id,
