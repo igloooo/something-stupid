@@ -131,7 +131,6 @@ __C.SZO.EVALUATION.THRESHOLDS = (80,)  # (0.5, 2, 5, 10, 30)
 __C.SZO.EVALUATION.ZR = edict()
 __C.SZO.EVALUATION.ZR.a = 58.53  # The a factor in the Z-R relationship
 __C.SZO.EVALUATION.ZR.b = 1.56  # The b factor in the Z-R relationship
-__C.SZO.EVALUATION.BALANCE_FACTOR = 5
 
 
 __C.MOVINGMNIST = edict()
@@ -180,6 +179,7 @@ __C.MODEL.GDL_LAMBDA = 0.0
 __C.MODEL.USE_SEASONALITY = False          # Whether to use seasonality
 __C.MODEL.GAN_G_LAMBDA = 0.2
 __C.MODEL.GAN_D_LAMBDA = 0.2
+__C.MODEL.BALANCE_FACTOR = 5.0
 
 
 __C.MODEL.TRAJRNN = edict()
@@ -223,6 +223,8 @@ __C.MODEL.DISCRIMINATOR.DISCRIM_CONV = [edict({'num_filter':32, 'kernel':[3, 3, 
 __C.MODEL.DISCRIMINATOR.DISCRIM_POOL = [edict({'num_filter':32, 'kernel':[4, 4, 4], 'stride':[2, 2, 2],'padding':[2, 2, 2]}),
                                        edict({'num_filter':64, 'kernel':[4, 4, 4], 'stride':[2, 2, 2],'padding':[2, 2, 2]}),
                                        edict({'num_filter':128, 'kernel':[3, 3, 3], 'stride':[2, 2, 2],'padding':[0, 0, 0]})]
+__C.MODEL.DISCRIMINATOR.SPECTRAL_NORMALIZE_FACTOR = 0.1
+
 
 __C.MODEL.DECONVBASELINE = edict()
 __C.MODEL.DECONVBASELINE.BASE_NUM_FILTER = 16

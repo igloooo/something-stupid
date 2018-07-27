@@ -623,6 +623,7 @@ def train_step(batch_size, encoder_net, forecaster_net,
     pred_grad_ordinary = loss_net.get_input_grads()[0]
     discrim_net.backward(out_grads=[loss_net.get_input_grads()[1]])
     pred_grad_gan = discrim_net.get_input_grads()[0]
+    #print(pred_grad_gan)
     pred_grad = pred_grad_ordinary + pred_grad_gan  # add up gradients computed from different path with respect to pred
 
     loss_dict = loss_net.get_output_dict()
@@ -646,31 +647,36 @@ def train_step(batch_size, encoder_net, forecaster_net,
     loss_D_net.forward_backward(data_batch=mx.io.DataBatch(data=[discrim_output],
                                                             label=[label]))
     dis_loss += mx.nd.mean(loss_D_net.get_output_dict()['dis_output']).asscalar()
+    print(mx.nd.mean(loss_D_net.get_output_dict()['dis_output']).asscalar())
     fake_grad = loss_D_net.get_input_grads()[0]
     discrim_net.backward(out_grads=[fake_grad])
     temp_grad = [[grad.copyto(grad.context) for grad in grads] for grads in discrim_net._exec_group.grad_arrays]
     # true data
-    label[:] = 1
+    label[:] = 1.0
     discrim_net.forward(data_batch=mx.io.DataBatch(data=[gt_nd]))
     discrim_output = discrim_net.get_outputs()[0]
     loss_D_net.forward_backward(data_batch=mx.io.DataBatch(data=[discrim_output],
                                                             label=[label]))
     dis_loss += mx.nd.mean(loss_D_net.get_output_dict()['dis_output']).asscalar()
+    print(mx.nd.mean(loss_D_net.get_output_dict()['dis_output']).asscalar())
     true_grad = loss_D_net.get_input_grads()[0]
     discrim_net.backward(out_grads=[true_grad])
     # add them up
+  
     for gradsr, gradsf in zip(discrim_net._exec_group.grad_arrays, temp_grad):
         for gradr, gradf in zip(gradsr, gradsf):
-            gradr += gradf
-    discrim_net.clip_by_global_norm(max_norm=cfg.MODEL.TRAIN.GRAD_CLIP)
+            gradr += gradf 
+    discriminator_grad_norm = discrim_net.clip_by_global_norm(max_norm=cfg.MODEL.TRAIN.GRAD_CLIP)
+    #print(discrim_net._exec_group.grad_arrays)
     discrim_net.update()
     discrim_net.spectral_normalize()
 
+    dis_loss = dis_loss / 2
+    loss_dict['dis_output'] = dis_loss
     loss_str = ", ".join(["%s=%g" %(k, v) for k, v in loss_dict.items()])
-    loss_str += ', dicrim loss {}'.format(dis_loss)
     if iter_id is not None:
-        logging.info("Iter:%d, %s, e_gnorm=%g, f_gnorm=%g"
-                     % (iter_id, loss_str, encoder_grad_norm, forecaster_grad_norm))
+        logging.info("Iter:%d, %s, e_gnorm=%g, f_gnorm=%g, d_gnorm=%g"
+                     % (iter_id, loss_str, encoder_grad_norm, forecaster_grad_norm, discriminator_grad_norm))
 
     return init_states, loss_dict
 

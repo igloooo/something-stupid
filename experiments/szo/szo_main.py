@@ -201,31 +201,27 @@ def train(args):
         encoder_net.load_optimizer_states(os.path.join(base_dir, 'encoder_net'+'-%04d.states'%(start_iter_id)))
         forecaster_net.load_optimizer_states(os.path.join(base_dir, 'forecaster_net'+'-%04d.states'%(start_iter_id)))
         discrim_net.load_optimizer_states(os.path.join(base_dir, 'discrim_net'+'-%04d.states'%(start_iter_id)))
-        with open(os.path.join(base_dir, 'loss_dicts.pkl'),'rb') as f:
-            loss_dicts = pickle.load(f)
-        train_mse_losses = loss_dicts['train_mse']
-        train_gdl_losses = loss_dicts['train_gdl']
-        train_gan_losses = loss_dicts['train_gan']
-        valid_mse_losses = loss_dicts['valid_mse']
-        valid_gdl_losses = loss_dicts['valid_gdl']
-        valid_gan_losses = loss_dicts['valid_gan']
+        with open(os.path.join(base_dir, 'train_loss_dicts.pkl'), 'rb') as f:
+            train_loss_dicts = pickle.load(f)
+        with open(os.path.join(base_dir, 'valid_loss_dicts.pkl'), 'rb') as f:
+            valid_loss_dicts = pickle.load(f)
     else:
         start_iter_id = 0
-        train_mse_losses = []
-        train_gdl_losses = []
-        train_gan_losses = []
-        valid_mse_losses = []
-        valid_gdl_losses = []
-        valid_gan_losses = []
+        train_loss_dicts = {}
+        valid_loss_dicts = {}
+        for dicts in (train_loss_dicts, valid_loss_dicts):
+            for typ in ('mse','gdl','gan','dis'):
+                dicts[typ] = []
+
     states = EncoderForecasterStates(factory=szo_nowcasting, ctx=args.ctx[0])
     for info in szo_nowcasting.init_encoder_state_info:
         assert info["__layout__"].find('N') == 0, "Layout=%s is not supported!" %info["__layout__"]
     for info in szo_nowcasting.init_forecaster_state_info:
         assert info["__layout__"].find('N') == 0, "Layout=%s is not supported!" % info["__layout__"]
 
-    total_mse_loss = 0.0
-    total_gdl_loss = 0.0
-    total_gan_loss = 0.0
+    cumulative_loss = {}
+    for k in train_loss_dicts.keys():
+        cumulative_loss[k] = 0.0
 
     iter_id = start_iter_id
     while iter_id < cfg.MODEL.TRAIN.MAX_ITER:
@@ -264,9 +260,8 @@ def train(args):
                                loss_D_net=loss_D_net, init_states=states,
                                data_nd=data_nd, gt_nd=target_nd, mask_nd=mask_nd,
                                iter_id=iter_id)
-        total_mse_loss += loss_dict['mse_output']
-        total_gdl_loss += loss_dict['gdl_output']
-        total_gan_loss += loss_dict['gan_output']
+        for k in cumulative_loss.keys():
+            cumulative_loss[k] += loss_dict[k+'_output']
 
         if (iter_id) % cfg.MODEL.VALID_ITER == 0:
             frame_dat_v = valid_szo_iter.sample()
@@ -279,27 +274,31 @@ def train(args):
             discrim_output = discrim_net.get_outputs()[0]
             loss_net.forward(data_batch=mx.io.DataBatch(data=[pred_nd_v, discrim_output],
                                                         label=[gt_nd_v, mask_nd_v]))
-            loss_v_mse = mx.nd.mean(loss_net.get_output_dict()['mse_output']).asscalar()
-            loss_v_gdl = mx.nd.mean(loss_net.get_output_dict()['gdl_output']).asscalar()
-            loss_v_gan = mx.nd.mean(loss_net.get_output_dict()['gan_output']).asscalar()
-            logging.info("iter {}, validation, mse loss {}, gdl loss {}".format(iter_id, loss_v_mse, loss_v_gdl, loss_v_gan))
-            valid_mse_losses.append(loss_v_mse)
-            valid_gdl_losses.append(loss_v_gdl)
-            valid_gan_losses.append(loss_v_gan)
-            plot_loss_curve(os.path.join(base_dir, 'valid_mse_loss'), valid_mse_losses)
-            plot_loss_curve(os.path.join(base_dir, 'valid_gdl_loss'), valid_gdl_losses)
-            plot_loss_curve(os.path.join(base_dir, 'valid_gan_loss'), valid_gan_losses)
+            loss_D_net.forward(data_batch=mx.io.DataBatch(data=[discrim_output],
+                                                        label=[mx.nd.zeros_like(discrim_output)]))
+            discrim_loss = mx.nd.mean(loss_D_net.get_outputs()[0]).asscalar()
+            discrim_net.forward(data_batch=mx.io.DataBatch(data=[gt_nd_v]))
+            discrim_output = discrim_net.get_outputs()[0]
+            loss_D_net.forward(data_batch=mx.io.DataBatch(data=[discrim_output],
+                                                        label=[mx.nd.ones_like(discrim_output)]))
+            discrim_loss += mx.nd.mean(discrim_net.get_outputs()[0]).asscalar()
+            discrim_loss = discrim_loss / 2
+            for k in valid_loss_dicts.keys():
+                if k != 'dis':
+                    loss = mx.nd.mean(loss_net.get_output_dict()[k+'_output']).asscalar()
+                else:
+                    loss =discrim_loss
+                valid_loss_dicts[k].append(loss)
+            loss_str = ", ".join(["%s=%g" %(k, v[-1]) for k, v in valid_loss_dicts.items()])
+            logging.info("iter {}, validation, {}".format(iter_id, loss_str))
+            for k in valid_loss_dicts.keys():
+                plot_loss_curve(os.path.join(base_dir, 'valid_'+k+'_loss'), valid_loss_dicts[k])
             
         if (iter_id) % cfg.MODEL.DRAW_EVERY == 0:
-            train_mse_losses.append(total_mse_loss / cfg.MODEL.DRAW_EVERY)
-            train_gdl_losses.append(total_gdl_loss / cfg.MODEL.DRAW_EVERY)
-            train_gan_losses.append(total_gan_loss / cfg.MODEL.DRAW_EVERY)
-            plot_loss_curve(os.path.join(base_dir, 'train_mse_loss'), train_mse_losses)
-            plot_loss_curve(os.path.join(base_dir, 'train_gdl_loss'), train_gdl_losses)
-            plot_loss_curve(os.path.join(base_dir, 'train_gan_loss'), train_gan_losses)
-            total_mse_loss = 0.0
-            total_gdl_loss = 0.0
-            total_gan_loss = 0.0
+            for k in train_loss_dicts.keys():
+                train_loss_dicts[k].append(cumulative_loss[k] / cfg.MODEL.DRAW_EVERY)
+                cumulative_loss[k] = 0.0
+                plot_loss_curve(os.path.join(base_dir, 'train_'+k+'_loss'), train_loss_dicts[k])
 
         if (iter_id) % cfg.MODEL.DISPLAY_EVERY == 0:
             new_frame_dat = train_szo_iter.sample()
@@ -350,11 +349,12 @@ def train(args):
                 prefix=os.path.join(base_dir, "discrim_net",),
                 epoch=iter_id,
                 save_optimizer_states=True)
-            path = os.path.join(base_dir, 'loss_dicts.pkl')
-            with open(path, 'wb') as f:
-                loss_dicts = {'train_mse':train_mse_losses, 'train_gdl':train_gdl_losses, 'train_gan':train_gan_losses,
-                              'valid_mse':valid_mse_losses, 'valid_gdl':valid_gdl_losses, 'valid_gan':valid_gan_losses}
-                pickle.dump(loss_dicts, f)
+            path1 = os.path.join(base_dir, 'train_loss_dicts.pkl')
+            path2 = os.path.join(base_dir, 'valid_loss_dicts.pkl')
+            with open(path1, 'wb') as f:
+                pickle.dump(train_loss_dicts, f)
+            with open(path2, 'wb') as f:
+                pickle.dump(valid_loss_dicts, f)
         iter_id += 1
         
 def predict(args, num_samples):

@@ -24,7 +24,7 @@ def get_loss_weight_symbol(data, mask, seq_len):
         assert cfg.SZO.ITERATOR.DOWN_RATIO == 1.0
         thresh_mat = data<1.0
         data_size = cfg.MODEL.OUT_LEN*cfg.MODEL.TRAIN.BATCH_SIZE*cfg.SZO.DATA.SIZE**2
-        ratio = mx.symbol.sum(thresh_mat)/data_size * cfg.SZO.EVALUATION.BALANCE_FACTOR
+        ratio = mx.symbol.sum(thresh_mat)/data_size * cfg.MODEL.BALANCE_FACTOR
         assert (ratio < 1.0) and (ratio > 0.0)
         weights = (mx.sym.broadcast_mul(thresh_mat, (1/(ratio+epsilon))) + mx.sym.broadcast_mul(1-thresh_mat, 1/(1-ratio+epsilon))) / 2 #* mask            
     else:
