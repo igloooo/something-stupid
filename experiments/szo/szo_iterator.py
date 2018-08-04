@@ -6,6 +6,7 @@ from nowcasting import image
 from nowcasting.mask import *
 from nowcasting.config import cfg
 from nowcasting.utils import *
+from nowcasting.helpers.visualization import save_hko_gif
 import os
 import random
 import mxnet as mx
@@ -16,15 +17,16 @@ plt.switch_backend('agg')
 import time
 
 class SZOIterator:
-    def __init__(self, rec_paths, in_len, out_len, batch_size, ctx, auto_add_file=True):
+    def __init__(self, rec_paths, in_len, out_len, batch_size, ctx, frame_skip=1, auto_add_file=True):
         if isinstance(rec_paths, list):
             self.rec_paths = rec_paths
         else:
             self.rec_paths = [rec_paths]
-        assert in_len + out_len < cfg.SZO.DATA.TOTAL_LEN, 'require a sequence that is too long'
+        assert (in_len + out_len)*frame_skip <= cfg.SZO.DATA.TOTAL_LEN, 'require a sequence that is too long'
         self.in_len = in_len
         self.out_len = out_len
         self.batch_size = batch_size
+        self.frame_skip = frame_skip
         self.height = cfg.SZO.DATA.SIZE // cfg.SZO.ITERATOR.DOWN_RATIO
         self.width = cfg.SZO.DATA.SIZE // cfg.SZO.ITERATOR.DOWN_RATIO
         self.dataset_ind = 0
@@ -50,8 +52,9 @@ class SZOIterator:
         finally:
             frames = batch.data[0].reshape([self.batch_size, cfg.SZO.DATA.TOTAL_LEN, 1, cfg.SZO.DATA.SIZE, cfg.SZO.DATA.SIZE])
             frames = frames.transpose([1,0,2,3,4]) # to make frames in a video appear consecutively
-        shift = random.randint(0, cfg.SZO.DATA.TOTAL_LEN - self.in_len - self.out_len)
-        frames = frames[shift:(shift+self.in_len+self.out_len),:,:,:,:]
+        ret_len = self.in_len + self.out_len
+        shift = random.randint(0, cfg.SZO.DATA.TOTAL_LEN - ret_len*self.frame_skip)
+        frames = frames[shift:(shift+ret_len*self.frame_skip):self.frame_skip,:,:,:,:]
         #masks = (frames <= cfg.SZO.DATA.RADAR_RANGE).astype(np.float32)       
         return frames.as_in_context(self.ctx)#, masks.as_in_context(self.ctx)
 
@@ -136,15 +139,16 @@ def save_png_sequence(np_seqs, path):
     plt.savefig(path)
     plt.close('all')
 
-def save_gif_examples(num, train_iterator=None, path=None):
+def save_gif_examples(num, train_iterator=None, save_path=None):
     if train_iterator is None:
         train_iterator = SZOIterator(rec_paths=cfg.SZO_TRAIN_DATA_PATHS,
                                      in_len=cfg.MODEL.IN_LEN,
                                      out_len=cfg.MODEL.OUT_LEN,
                                      batch_size=1,
+                                     frame_skip=1,
                                      ctx=mx.gpu()) 
-    if path is None:
-        path = 'data_display'
+    if save_path is None:
+        save_path = 'data_display'
 
     for i in range(num):
         train_batch = train_iterator.sample()
@@ -152,11 +156,11 @@ def save_gif_examples(num, train_iterator=None, path=None):
         examples = train_batch[:,0,0,:,:].asnumpy().astype(np.uint8)
         scaled_examples = ((examples*(examples<255))*(255/80)).astype(np.uint8)
 
-        if not os.path.exists(path):
-            os.makedirs(path)
+        if not os.path.exists(save_path):
+            os.makedirs(save_path)
 
-        original_name_str = os.path.join(path, 'original')
-        scaled_name_str = os.path.join(path, 'scaled')
+        original_name_str = os.path.join(save_path, 'original')
+        scaled_name_str = os.path.join(save_path, 'scaled')
 
         save_hko_gif(examples, save_path=original_name_str +str(i) + '.gif', multiply_by_255=False)
         save_hko_gif(scaled_examples, save_path=scaled_name_str + str(i) + '.gif', multiply_by_255=False)
@@ -169,23 +173,15 @@ def save_gif_examples(num, train_iterator=None, path=None):
 # Simple test for the performance of the HKO iterator.
 if __name__ == '__main__':
     np.random.seed(123)
-    import time
-    from nowcasting.config import cfg
-    from nowcasting.helpers.visualization import save_hko_gif, save_hko_movie
-    '''
-    path = os.path.join(cfg.ROOT_DIR, 'szo_data', 'train', 'TRAIN_001.rec')
-    train_iterator = SZOIterator(rec_paths=path,
-                                 in_len=cfg.MODEL.IN_LEN,
-                                 out_len=cfg.MODEL.OUT_LEN,
+    
+    rec_path = os.path.join(cfg.ROOT_DIR, 'szo_data', 'train', 'TRAIN_1_2.rec')
+    save_path = 'data_display'
+    train_iterator = SZOIterator(rec_paths=rec_path,
+                                 in_len=5,
+                                 out_len=5,
                                  batch_size=32,
+                                 frame_skip=6,  # 
                                  ctx=mx.gpu())
-    for i in range(200):
-        _ = train_iterator.sample()
-        print((i+1)*32)
-    '''
-    save_gif_examples(20)
-    
-    
-    #show_histogram(64, 100)
+    save_gif_examples(20, train_iterator=train_iterator, save_path=save_path)
      
 

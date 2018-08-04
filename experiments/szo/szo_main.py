@@ -134,6 +134,14 @@ def plot_loss_curve(path, losses):
     plt.savefig(path)
     plt.close('all')
 
+def synchronize_kvstore(module):
+    def updater_assign(key, inputs, stored):
+        stored[:] = inputs
+    module._kvstore._set_updater(updater_assign)
+    for k, w in zip(module._exec_group.param_names, module._exec_group.param_arrays):
+        module._kvstore.push(k, w[0].as_in_context(mx.cpu(0)))
+    module._kvstore._set_updater(mx.optimizer.get_updater(module._optimizer))
+
 def train(args):
     base_dir = get_base_dir(args)
     logging_config(folder=base_dir)
@@ -141,27 +149,18 @@ def train(args):
     if cfg.MODEL.TRAIN.TBPTT:
         # Create a set of sequent iterators with different starting point
         raise NotImplementedError
-        '''
-        train_szo_iters = []
-        train_szo_iter_restart = []
-        for _ in range(cfg.MODEL.TRAIN.BATCH_SIZE):
-            ele_iter = SZOIterator(path=cfg.SZO_TRAIN_DATA_PATH,
-                                   seq_len=cfg.SZO.ITERATOR.TRAIN_IN_LEN
-                                          +cfg.SZO.ITERATOR.TRAIN_OUT_LEN)
-            ele_iter.random_reset()
-            train_szo_iter_restart.append(True)
-            train_szo_iters.append(ele_iter)
-        '''
     else:
         train_szo_iter = SZOIterator(rec_paths=cfg.SZO_TRAIN_DATA_PATHS,
                                    in_len=cfg.MODEL.IN_LEN,
                                    out_len=cfg.MODEL.OUT_LEN,
                                    batch_size=cfg.MODEL.TRAIN.BATCH_SIZE,
+                                   frame_skip=cfg.MODEL.FRAME_SKIP,
                                    ctx=args.ctx)
         valid_szo_iter = SZOIterator(rec_paths=cfg.SZO_TEST_DATA_PATHS,
                                      in_len=cfg.MODEL.IN_LEN,
                                      out_len=cfg.MODEL.OUT_LEN,
                                      batch_size=cfg.MODEL.TRAIN.BATCH_SIZE,
+                                     frame_skip=cfg.MODEL.FRAME_SKIP,
                                      ctx=args.ctx)
         
     szo_nowcasting = SZONowcastingFactory(batch_size=cfg.MODEL.TRAIN.BATCH_SIZE // len(args.ctx),
@@ -181,26 +180,14 @@ def train(args):
     # try to load checkpoint
     if args.resume:
         start_iter_id = latest_iter_id(base_dir)
-        '''
-        encoder_net.load(prefix=os.path.join(base_dir, 'encoder_net'),
-                         epoch=start_iter_id,
-                         load_optimizer_states=True,
-                         data_names=[ele.name for ele in szo_nowcasting.encoder_data_desc()],
-                         label_names=[],
-                         context=args.ctx[0])
-        forecaster_net.load(prefix=os.path.join(base_dir, 'forecaster_net'),
-                         epoch=start_iter_id,
-                         load_optimizer_states=True,
-                         data_names=[ele.name for ele in szo_nowcasting.forecaster_data_desc()],
-                         label_names=[],
-                         context=args.ctx[0])
-        '''
         encoder_net.load_params(os.path.join(base_dir, 'encoder_net'+'-%04d.params'%(start_iter_id)))
         forecaster_net.load_params(os.path.join(base_dir, 'forecaster_net'+'-%04d.params'%(start_iter_id)))
         discrim_net.load_params(os.path.join(base_dir, 'discrim_net'+'-%04d.params'%(start_iter_id)))
         encoder_net.load_optimizer_states(os.path.join(base_dir, 'encoder_net'+'-%04d.states'%(start_iter_id)))
         forecaster_net.load_optimizer_states(os.path.join(base_dir, 'forecaster_net'+'-%04d.states'%(start_iter_id)))
         discrim_net.load_optimizer_states(os.path.join(base_dir, 'discrim_net'+'-%04d.states'%(start_iter_id)))
+        for module in (encoder_net, forecaster_net, discrim_net):
+            synchronize_kvstore(module)
         with open(os.path.join(base_dir, 'train_loss_dicts.pkl'), 'rb') as f:
             train_loss_dicts = pickle.load(f)
         with open(os.path.join(base_dir, 'valid_loss_dicts.pkl'), 'rb') as f:
@@ -232,25 +219,6 @@ def train(args):
         else:
             # We are using TBPTT, we should sample minibatches from the iterators.
             raise NotImplementedError
-            '''
-            frame_dat_l = []
-            mask_dat_l = []
-            for i, ele_iter in enumerate(train_szo_iters):
-                if ele_iter.use_up:
-                    states.reset_batch(batch_id=i)
-                    ele_iter.random_reset()
-                    train_hko_iter_restart[i] = True
-                if train_hko_iter_restart[i] == False and ele_iter.check_new_start():
-                    states.reset_batch(batch_id=i)
-                    ele_iter.random_reset()
-                frame_dat, mask_dat, datetime_clips, _ = \
-                    ele_iter.sample(batch_size=cfg.MODEL.TRAIN.BATCH_SIZE)
-                train_hko_iter_restart[i] = False
-                frame_dat_l.append(frame_dat)
-                mask_dat_l.append(mask_dat)
-            frame_dat = np.concatenate(frame_dat_l, axis=1)
-            mask_dat = np.concatenate(mask_dat_l, axis=1)
-            '''
         data_nd = frame_dat[0:cfg.MODEL.IN_LEN,:,:,:,:] / 255.0  # scale to [0,1]
         target_nd = frame_dat[cfg.MODEL.IN_LEN:(cfg.MODEL.IN_LEN + cfg.MODEL.OUT_LEN),:,:,:,:] / 255.0
         mask_nd = mx.nd.ones_like(target_nd)
@@ -384,6 +352,7 @@ def predict(args, num_samples):
                                in_len=cfg.MODEL.IN_LEN,
                                out_len=cfg.MODEL.OUT_LEN,
                                batch_size=1,
+                               frame_skip=cfg.MODEL.FRAME_SKIP,
                                ctx=args.ctx)
     szo_nowcasting = SZONowcastingFactory(batch_size=1,
                                           ctx_num=1,
