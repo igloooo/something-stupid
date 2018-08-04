@@ -118,7 +118,7 @@ def save_png_sequence(np_seqs, path):
             frame = np.concatenate([frame, frame, frame], axis=2)
             plt.imshow(frame)
     plt.savefig(path)
-    plt.close()
+    plt.close('all')
 
 def save_gif_examples(num):
     train_iterator = SZOIterator(rec_paths=cfg.SZO_TRAIN_DATA_PATHS,

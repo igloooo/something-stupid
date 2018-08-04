@@ -132,10 +132,9 @@ def plot_loss_curve(path, losses):
     ax.yaxis.set_major_locator(loc)
     plt.plot(losses)
     plt.savefig(path)
-    plt.close()
+    plt.close('all')
 
 def train(args):
-    assert cfg.MODEL.FRAME_STACK == 1 and cfg.MODEL.FRAME_SKIP == 1
     base_dir = get_base_dir(args)
     logging_config(folder=base_dir)
     save_cfg(dir_path=base_dir, source=cfg.MODEL)
@@ -168,7 +167,8 @@ def train(args):
     szo_nowcasting = SZONowcastingFactory(batch_size=cfg.MODEL.TRAIN.BATCH_SIZE // len(args.ctx),
                                           ctx_num=len(args.ctx),
                                           in_seq_len=cfg.MODEL.IN_LEN,
-                                          out_seq_len=cfg.MODEL.OUT_LEN)
+                                          out_seq_len=cfg.MODEL.OUT_LEN,
+                                          frame_stack=cfg.MODEL.FRAME_STACK)
     encoder_net, forecaster_net, loss_net, discrim_net, loss_D_net = \
         encoder_forecaster_build_networks(
             factory=szo_nowcasting,
@@ -261,9 +261,10 @@ def train(args):
                                data_nd=data_nd, gt_nd=target_nd, mask_nd=mask_nd,
                                iter_id=iter_id)
         for k in cumulative_loss.keys():
-            cumulative_loss[k] += loss_dict[k+'_output']
+            loss = loss_dict[k+'_output']
+            cumulative_loss[k] += loss
 
-        if (iter_id) % cfg.MODEL.VALID_ITER == 0:
+        if (iter_id+1) % cfg.MODEL.VALID_ITER == 0:
             frame_dat_v = valid_szo_iter.sample()
             data_nd_v = frame_dat_v[0:cfg.MODEL.IN_LEN,:,:,:,:] / 255.0
             gt_nd_v = frame_dat_v[cfg.MODEL.IN_LEN:(cfg.MODEL.IN_LEN+cfg.MODEL.OUT_LEN),:,:,:,:] / 255.0
@@ -284,23 +285,41 @@ def train(args):
             discrim_loss += mx.nd.mean(discrim_net.get_outputs()[0]).asscalar()
             discrim_loss = discrim_loss / 2
             for k in valid_loss_dicts.keys():
-                if k != 'dis':
+                if k == 'dis':
+                    if discrim_loss > 1.0:
+                        loss = 1.0
+                    else:        
+                        loss = discrim_loss
+                elif k == 'gan':
                     loss = mx.nd.mean(loss_net.get_output_dict()[k+'_output']).asscalar()
+                    if loss > 1.0:
+                        loss = 1.0
                 else:
-                    loss =discrim_loss
+                    loss = mx.nd.mean(loss_net.get_output_dict()[k+'_output']).asscalar()
+                if loss < 0:
+                    loss = 0
                 valid_loss_dicts[k].append(loss)
             loss_str = ", ".join(["%s=%g" %(k, v[-1]) for k, v in valid_loss_dicts.items()])
             logging.info("iter {}, validation, {}".format(iter_id, loss_str))
             for k in valid_loss_dicts.keys():
                 plot_loss_curve(os.path.join(base_dir, 'valid_'+k+'_loss'), valid_loss_dicts[k])
             
-        if (iter_id) % cfg.MODEL.DRAW_EVERY == 0:
+        if (iter_id+1) % cfg.MODEL.DRAW_EVERY == 0:
             for k in train_loss_dicts.keys():
-                train_loss_dicts[k].append(cumulative_loss[k] / cfg.MODEL.DRAW_EVERY)
+                avg_loss = cumulative_loss[k] / cfg.MODEL.DRAW_EVERY
+                if k=='gan':
+                    if avg_loss > 1.0:
+                        avg_loss = 1.0
+                elif k == 'dis':
+                    if avg_loss > 1.0:
+                        avg_loss = 1.0
+                if avg_loss < 0:
+                    avg_loss = 0
+                train_loss_dicts[k].append(avg_loss)
                 cumulative_loss[k] = 0.0
                 plot_loss_curve(os.path.join(base_dir, 'train_'+k+'_loss'), train_loss_dicts[k])
 
-        if (iter_id) % cfg.MODEL.DISPLAY_EVERY == 0:
+        if (iter_id+1) % cfg.MODEL.DISPLAY_EVERY == 0:
             new_frame_dat = train_szo_iter.sample()
             data_nd = new_frame_dat[0:cfg.MODEL.IN_LEN,:,:,:,:] / 255.0
             target_nd = new_frame_dat[cfg.MODEL.IN_LEN:(cfg.MODEL.IN_LEN+cfg.MODEL.OUT_LEN),:,:,:,:] / 255.0
@@ -336,7 +355,7 @@ def train(args):
                               'valid_mse':valid_mse_losses, 'valid_gdl':valid_gdl_losses}
                 pickle.dump(loss_dicts, f)
         '''
-        if (iter_id) % cfg.MODEL.SAVE_ITER == 0:
+        if (iter_id+1) % cfg.MODEL.SAVE_ITER == 0:
             encoder_net.save_checkpoint(
                 prefix=os.path.join(base_dir, "encoder_net",),
                 epoch=iter_id,

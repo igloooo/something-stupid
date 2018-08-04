@@ -24,9 +24,9 @@ def get_loss_weight_symbol(data, mask, seq_len):
         assert cfg.SZO.ITERATOR.DOWN_RATIO == 1.0
         thresh_mat = data<1.0
         data_size = cfg.MODEL.OUT_LEN*cfg.MODEL.TRAIN.BATCH_SIZE*cfg.SZO.DATA.SIZE**2
-        ratio = mx.symbol.sum(thresh_mat)/data_size * cfg.MODEL.BALANCE_FACTOR
+        ratio = mx.symbol.sum(thresh_mat)/data_size
         assert (ratio < 1.0) and (ratio > 0.0)
-        weights = (mx.sym.broadcast_mul(thresh_mat, (1/(ratio+epsilon))) + mx.sym.broadcast_mul(1-thresh_mat, 1/(1-ratio+epsilon))) / 2 #* mask            
+        weights = (mx.sym.broadcast_mul(thresh_mat, (cfg.MODEL.BALANCE_FACTOR/(ratio+epsilon))) + mx.sym.broadcast_mul(1-thresh_mat, (1-cfg.MODEL.BALANCE_FACTOR)/(1-ratio+epsilon))) / 2 #* mask            
     else:
         weights = mask
     if cfg.MODEL.TEMPORAL_WEIGHT_TYPE == "same":
@@ -56,11 +56,13 @@ class SZONowcastingFactory(EncoderForecasterBaseFactory):
                  batch_size,
                  in_seq_len,
                  out_seq_len,
+                 frame_stack=1,
                  ctx_num=1,
                  name="szo_nowcasting"):
         super(SZONowcastingFactory, self).__init__(batch_size=batch_size,
                                                    in_seq_len=in_seq_len,
                                                    out_seq_len=out_seq_len,
+                                                   frame_stack=frame_stack,
                                                    ctx_num=ctx_num,
                                                    height=cfg.SZO.ITERATOR.RESIZED_SIZE,
                                                    width=cfg.SZO.ITERATOR.RESIZED_SIZE,
@@ -76,12 +78,16 @@ class SZONowcastingFactory(EncoderForecasterBaseFactory):
         # transform the layout to (batch_size, channels, seq_len, height, width)
         video = mx.symbol.transpose(video, axes=(1, 2, 0, 3, 4))
         num_layers = len(cfg.MODEL.DISCRIMINATOR.DISCRIM_CONV) 
+        pool_layer = mx.gluon.nn.MaxPool3D(strides=cfg.MODEL.DISCRIMINATOR.DOWNSAMPLE_VIDEO, padding=1)
+        video = pool_layer(video)
         for i in range(num_layers):
             if i==0:
                 inputs = video
             else:
                 inputs = output
-            output = conv3d_act(data=inputs, 
+            output = conv3d_bn_act(data=inputs, 
+                                height=cfg.MODEL.DISCRIMINATOR.FEATMAP_SIZE[i][1],
+                                width=cfg.MODEL.DISCRIMINATOR.FEATMAP_SIZE[i][1],
                                 num_filter=cfg.MODEL.DISCRIMINATOR.DISCRIM_CONV[i]['num_filter'],
                                 kernel=cfg.MODEL.DISCRIMINATOR.DISCRIM_CONV[i]['kernel'],
                                 stride=cfg.MODEL.DISCRIMINATOR.DISCRIM_CONV[i]['stride'],
@@ -90,7 +96,9 @@ class SZONowcastingFactory(EncoderForecasterBaseFactory):
                                 name='discrim_conv'+str(i))
             # another conv3d will serve as pooling layer
             if i<num_layers-1:
-                output = conv3d_act(data=output,
+                output = conv3d_bn_act(data=output,
+                                    height=cfg.MODEL.DISCRIMINATOR.FEATMAP_SIZE[i+1][1],
+                                    width=cfg.MODEL.DISCRIMINATOR.FEATMAP_SIZE[i+1][1],
                                     num_filter=cfg.MODEL.DISCRIMINATOR.DISCRIM_POOL[i]['num_filter'],
                                     kernel=cfg.MODEL.DISCRIMINATOR.DISCRIM_POOL[i]['kernel'],
                                     stride=cfg.MODEL.DISCRIMINATOR.DISCRIM_POOL[i]['stride'],
@@ -99,7 +107,8 @@ class SZONowcastingFactory(EncoderForecasterBaseFactory):
                                     name='discrim_pool'+str(i))
         output = fc_layer(data=output.reshape([self._batch_size, -1]),
                         num_hidden=1,
-                        name='discrim_fc')
+                        name='discrim_fc',
+                        no_bias=True)
         output = output.reshape([self._batch_size,])
         return output 
 
@@ -121,7 +130,7 @@ class SZONowcastingFactory(EncoderForecasterBaseFactory):
         mae = weighted_mae(pred=pred, gt=target, weight=weights)
         gdl = masked_gdl_loss(pred=pred, gt=target, mask=mask)
         # gan loss is for a whole sequence, and isn't influenced by weights
-        gan = mx.sym.square(mx.sym.broadcast_add(discrim_output, -mx.sym.ones([1])))
+        gan = mx.sym.abs(mx.sym.broadcast_add(discrim_output, -mx.sym.ones([1])))
         avg_mse = mx.sym.mean(mse)
         avg_mae = mx.sym.mean(mae)
         avg_gdl = mx.sym.mean(gdl)
@@ -158,7 +167,7 @@ class SZONowcastingFactory(EncoderForecasterBaseFactory):
     def loss_D_sym(self, 
                 discrim_output=mx.sym.Variable('discrim_out'), 
                 label=mx.sym.Variable('discrim_label')):
-        discrim_loss = mx.sym.square(mx.sym.broadcast_add(discrim_output, -label))
+        discrim_loss = mx.sym.abs(mx.sym.broadcast_add(discrim_output, -label))
         avg_discrim_loss = mx.sym.mean(discrim_loss)
         global_grad_scale = cfg.MODEL.NORMAL_LOSS_GLOBAL_SCALE
         if cfg.MODEL.GAN_D_LAMBDA > 0:

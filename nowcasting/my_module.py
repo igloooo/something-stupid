@@ -8,6 +8,7 @@ import numpy as np
 import mxnet.ndarray as nd
 from collections import OrderedDict
 from mxnet.module import Module
+from nowcasting.config import cfg
 
 
 def nd_global_norm(t_list):
@@ -88,6 +89,8 @@ class MyModule(Module):
             stored[:] = inputs
         self._kvstore._set_updater(updater_assign)
         for i,(k, w) in enumerate(zip(self._exec_group.param_names, self._exec_group.param_arrays)):
+            if k != 'discrim_fc_weight':  # only normalize fc layer!
+                continue
             w = w[0].as_in_context(mx.cpu(0))
             w_reshaped = w.reshape([w.shape[0],-1])
             if not k in self.us:
@@ -101,8 +104,7 @@ class MyModule(Module):
             self.vs[k] = v
             sigma = mx.nd.linalg_gemm2(v, mx.nd.linalg_gemm2(w_reshaped, u), transpose_a=True)
             sigma = sigma.reshape([1])
-            new_w = w / sigma
-            #print('sigma:',sigma)
+            new_w = w / sigma * cfg.MODEL.DISCRIMINATOR.SPECTRAL_NORMALIZE_FACTOR
             self._kvstore.push(k, new_w)
             self._kvstore.pull(k, self._exec_group.param_arrays[i])
         self._kvstore._set_updater(mx.optimizer.get_updater(self._optimizer))

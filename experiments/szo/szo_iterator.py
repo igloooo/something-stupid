@@ -134,7 +134,7 @@ def save_png_sequence(np_seqs, path):
             frame = np.concatenate([frame, frame, frame], axis=2)
             plt.imshow(frame)
     plt.savefig(path)
-    plt.close()
+    plt.close('all')
 
 def save_gif_examples(num, train_iterator=None, path=None):
     if train_iterator is None:
@@ -172,7 +172,7 @@ if __name__ == '__main__':
     import time
     from nowcasting.config import cfg
     from nowcasting.helpers.visualization import save_hko_gif, save_hko_movie
-    
+    '''
     path = os.path.join(cfg.ROOT_DIR, 'szo_data', 'train', 'TRAIN_001.rec')
     train_iterator = SZOIterator(rec_paths=path,
                                  in_len=cfg.MODEL.IN_LEN,
@@ -182,7 +182,8 @@ if __name__ == '__main__':
     for i in range(200):
         _ = train_iterator.sample()
         print((i+1)*32)
-
+    '''
+    save_gif_examples(20)
     
     
     #show_histogram(64, 100)

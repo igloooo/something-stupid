@@ -64,15 +64,17 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
                  out_seq_len,
                  height,
                  width,
+                 frame_stack=1,
                  ctx_num=1,
                  name="encoder_forecaster"):
         super(EncoderForecasterBaseFactory, self).__init__(batch_size=batch_size,
+                                                           ctx_num=ctx_num,
                                                            in_seq_len=in_seq_len,
                                                            out_seq_len=out_seq_len,
+                                                           frame_stack=frame_stack,
                                                            height=height,
                                                            width=width,
                                                            name=name)
-        self._ctx_num = ctx_num
 
     def _init_rnn(self):
         self._encoder_rnn_blocks, self._forecaster_rnn_blocks, self._gan_rnn_blocks =\
@@ -112,8 +114,9 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
     '''
 
     def stack_rnn_encode(self, data):
+        assert self._in_seq_len % self._frame_stack == 0, 'frame_stack cannot devide seq_len'
         CONFIG = cfg.MODEL.ENCODER_FORECASTER
-        pre_encoded_data = self._pre_encode_frame(frame_data=data, seqlen=self._in_seq_len)
+        pre_encoded_data = self._pre_encode_frame(frame_data=data, seqlen=self._in_seq_len, frame_stack=self._frame_stack)
         reshape_data = mx.sym.Reshape(pre_encoded_data, shape=(-1, 0, 0, 0), reverse=True)
 
         # Encoder Part
@@ -141,7 +144,7 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
             else:
                 inputs = downsample
             rnn_out, states = self._encoder_rnn_blocks[i].unroll(
-                length=self._in_seq_len,
+                length=self._in_seq_len//self._frame_stack,
                 inputs=inputs,
                 begin_states=None,
                 ret_mid=False)
@@ -162,6 +165,7 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
         return encoder_rnn_block_states
 
     def stack_rnn_forecast(self, block_state_list, last_frame):
+        assert self._out_seq_len % self._frame_stack == 0
         CONFIG = cfg.MODEL.ENCODER_FORECASTER
         block_state_list = [self._forecaster_rnn_blocks[i].to_split(block_state_list[i])
                             for i in range(len(self._forecaster_rnn_blocks))]
@@ -171,7 +175,7 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
         curr_inputs = None
         for i in range(rnn_block_num - 1, -1, -1):
             rnn_out, rnn_state = self._forecaster_rnn_blocks[i].unroll(
-                length=self._out_seq_len, inputs=curr_inputs,
+                length=self._out_seq_len//self._frame_stack, inputs=curr_inputs,
                 begin_states=block_state_list[i][::-1],  # Reverse the order of states for the forecaster
                 ret_mid=False)
             rnn_block_outputs.append(rnn_out)
@@ -196,10 +200,10 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
                                       stride=(CONFIG.LAST_DECONV[2], CONFIG.LAST_DECONV[2]),
                                       pad=(CONFIG.LAST_DECONV[3], CONFIG.LAST_DECONV[3]))
             flow = dynamic_filter
-            dynamic_filter = mx.sym.SliceChannel(dynamic_filter, axis=0, num_outputs=self._out_seq_len)
+            dynamic_filter = mx.sym.SliceChannel(dynamic_filter, axis=0, num_outputs=self._out_seq_len//self._frame_stack)
             prev_frame = last_frame
             preds = []
-            for i in range(self._out_seq_len):
+            for i in range(self._out_seq_len//self._frame_stack):
                 pred_ele = DFN(data=prev_frame, local_kernels=dynamic_filter[i], K=11, batch_size=self._batch_size)
                 preds.append(pred_ele)
                 prev_frame = pred_ele
@@ -221,7 +225,8 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
                                    act_type=cfg.MODEL.CNN_ACT_TYPE,
                                    name="fdeconv1")
             if cfg.MODEL.ENCODER_FORECASTER.USE_SKIP:
-                last_frame_repeat = mx.sym.repeat(last_frame, repeats=self._out_seq_len, axis=0)
+                last_frame = mx.sym.repeat(last_frame, repeats=self._frame_stack, axis=1)
+                last_frame_repeat = mx.sym.repeat(last_frame, repeats=self._out_seq_len//self._frame_stack, axis=0)
                 concated_layer = mx.sym.concat(deconv1, last_frame_repeat, dim=1)
             else:
                 concated_layer = deconv1
@@ -230,13 +235,26 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
                                     kernel=(3, 3), stride=(1, 1), pad=(1, 1),
                                     act_type=cfg.MODEL.CNN_ACT_TYPE, name="conv_final")
             pred = conv2d(data=conv_final,
-                          num_filter=1, kernel=(1, 1), name="out")
+                          num_filter=self._frame_stack, kernel=(1, 1), name="out")
+
         else:
             raise NotImplementedError
+        #print(pred.infer_shape(fbrnn1_begin_state_h=(2, 64, 83, 83),fbrnn2_begin_state_h=(2, 192, 41, 41),fbrnn3_begin_state_h=(2, 192, 20, 20)))
+        pred = mx.sym.Reshape(pred,
+                              shape=(self._out_seq_len//self._frame_stack, self._batch_size,
+                                     self._frame_stack, self._height, self._width),
+                              __layout__="TNCHW")
+        #print(pred.infer_shape(fbrnn1_begin_state_h=(2, 64, 83, 83),fbrnn2_begin_state_h=(2, 192, 41, 41),fbrnn3_begin_state_h=(2, 192, 20, 20)))
+        pred = pred.transpose([1,0,2,3,4])
+        pred = pred.reshape([self._batch_size, self._out_seq_len, 1, self._height, self._width])
+        pred = pred.transpose([1,0,2,3,4])
+        # for safety
         pred = mx.sym.Reshape(pred,
                               shape=(self._out_seq_len, self._batch_size,
                                      1, self._height, self._width),
                               __layout__="TNCHW")
+        
+
         return pred, flow   
 
     def encoder_sym(self):
@@ -377,66 +395,68 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
     
 
 
-def init_optimizer_using_cfg(net, for_finetune):
+def init_optimizer_using_cfg(net, for_finetune, lr=cfg.MODEL.TRAIN.LR, min_lr=cfg.MODEL.TRAIN.MIN_LR, lr_decay_iter=cfg.MODEL.TRAIN.LR_DECAY_ITER,  lr_decay_factor=cfg.MODEL.TRAIN.LR_DECAY_FACTOR, optimizer_type=None):
+    if optimizer_type is None:
+        optimizer_type = cfg.MODEL.TRAIN.OPTIMIZER.lower()
     if not for_finetune:
-        lr_scheduler = mx.lr_scheduler.FactorScheduler(step=cfg.MODEL.TRAIN.LR_DECAY_ITER,
-                                                       factor=cfg.MODEL.TRAIN.LR_DECAY_FACTOR,
-                                                       stop_factor_lr=cfg.MODEL.TRAIN.MIN_LR)
-        if cfg.MODEL.TRAIN.OPTIMIZER.lower() == "adam":
+        lr_scheduler = mx.lr_scheduler.FactorScheduler(step=lr_decay_iter,
+                                                       factor=lr_decay_factor,
+                                                       stop_factor_lr=min_lr)
+        if optimizer_type == "adam":
             net.init_optimizer(optimizer="adam",
-                               optimizer_params={'learning_rate': cfg.MODEL.TRAIN.LR,
+                               optimizer_params={'learning_rate': lr,
                                                  'beta1': cfg.MODEL.TRAIN.BETA1,
                                                  'rescale_grad': 1.0,
                                                  'epsilon': cfg.MODEL.TRAIN.EPS,
                                                  'lr_scheduler': lr_scheduler,
                                                  'wd': cfg.MODEL.TRAIN.WD})
-        elif cfg.MODEL.TRAIN.OPTIMIZER.lower() == "rmsprop":
+        elif optimizer_type == "rmsprop":
             net.init_optimizer(optimizer="rmsprop",
-                               optimizer_params={'learning_rate': cfg.MODEL.TRAIN.LR,
+                               optimizer_params={'learning_rate': lr,
                                                  'gamma1': cfg.MODEL.TRAIN.GAMMA1,
                                                  'rescale_grad': 1.0,
                                                  'epsilon': cfg.MODEL.TRAIN.EPS,
                                                  'lr_scheduler': lr_scheduler,
                                                  'wd': cfg.MODEL.TRAIN.WD})
-        elif cfg.MODEL.TRAIN.OPTIMIZER.lower() == "sgd":
+        elif optimizer_type == "sgd":
             net.init_optimizer(optimizer="sgd",
-                               optimizer_params={'learning_rate': cfg.MODEL.TRAIN.LR,
+                               optimizer_params={'learning_rate': lr,
                                                  'momentum': 0.0,
                                                  'rescale_grad': 1.0,
                                                  'lr_scheduler': lr_scheduler,
                                                  'wd': cfg.MODEL.TRAIN.WD})
-        elif cfg.MODEL.TRAIN.OPTIMIZER.lower() == "adagrad":
+        elif optimizer_type == "adagrad":
             net.init_optimizer(optimizer="adagrad",
-                               optimizer_params={'learning_rate': cfg.MODEL.TRAIN.LR,
+                               optimizer_params={'learning_rate': lr,
                                                  'eps': cfg.MODEL.TRAIN.EPS,
                                                  'rescale_grad': 1.0,
                                                  'wd': cfg.MODEL.TRAIN.WD})
         else:
             raise NotImplementedError
     else:
-        if cfg.MODEL.TEST.ONLINE.OPTIMIZER.lower() == "adam":
+        if optimizer_type == "adam":
             net.init_optimizer(optimizer="adam",
-                               optimizer_params={'learning_rate': cfg.MODEL.TEST.ONLINE.LR,
+                               optimizer_params={'learning_rate': lr,
                                                  'beta1': cfg.MODEL.TEST.ONLINE.BETA1,
                                                  'rescale_grad': 1.0,
                                                  'epsilon': cfg.MODEL.TEST.ONLINE.EPS,
                                                  'wd': cfg.MODEL.TEST.ONLINE.WD})
-        elif cfg.MODEL.TEST.ONLINE.OPTIMIZER.lower() == "rmsprop":
+        elif optimizer_type == "rmsprop":
             net.init_optimizer(optimizer="rmsprop",
-                               optimizer_params={'learning_rate': cfg.MODEL.TEST.ONLINE.LR,
+                               optimizer_params={'learning_rate': lr,
                                                  'gamma1': cfg.MODEL.TEST.ONLINE.GAMMA1,
                                                  'rescale_grad': 1.0,
                                                  'epsilon': cfg.MODEL.TEST.ONLINE.EPS,
                                                  'wd': cfg.MODEL.TEST.ONLINE.WD})
-        elif cfg.MODEL.TEST.ONLINE.OPTIMIZER.lower() == "sgd":
+        elif optimizer_type == "sgd":
             net.init_optimizer(optimizer="sgd",
-                               optimizer_params={'learning_rate': cfg.MODEL.TEST.ONLINE.LR,
+                               optimizer_params={'learning_rate': lr,
                                                  'momentum': 0.0,
                                                  'rescale_grad': 1.0,
                                                  'wd': cfg.MODEL.TEST.ONLINE.WD})
-        elif cfg.MODEL.TEST.ONLINE.OPTIMIZER.lower() == "adagrad":
+        elif optimizer_type == "adagrad":
             net.init_optimizer(optimizer="adagrad",
-                               optimizer_params={'learning_rate': cfg.MODEL.TEST.ONLINE.LR,
+                               optimizer_params={'learning_rate': lr,
                                                  'eps': cfg.MODEL.TRAIN.EPS,
                                                  'rescale_grad': 1.0,
                                                  'wd': cfg.MODEL.TEST.ONLINE.WD})
@@ -514,7 +534,12 @@ def encoder_forecaster_build_networks(factory, context,
                     inputs_need_grad=True,
                     shared_module=None)
     discrim_net.init_params(mx.init.MSRAPrelu(slope=0.2))
-    init_optimizer_using_cfg(discrim_net, for_finetune=for_finetune)
+    init_optimizer_using_cfg(discrim_net, for_finetune=for_finetune,
+                            lr=cfg.MODEL.TRAIN.LR_DIS,
+                            min_lr=cfg.MODEL.TRAIN.MIN_LR_DIS,
+                            lr_decay_iter=cfg.MODEL.TRAIN.LR_DECAY_ITER_DIS, 
+                            lr_decay_factor=cfg.MODEL.TRAIN.LR_DECAY_FACTOR_DIS,
+                            optimizer_type=cfg.MODEL.TRAIN.OPTIMIZER_DIS.lower())
 
     loss_D_net = MyModule(factory.loss_D_sym(),
                         data_names=[ele.name for ele in
@@ -619,10 +644,10 @@ def train_step(batch_size, encoder_net, forecaster_net,
     else:
         loss_net.forward_backward(data_batch=mx.io.DataBatch(data=[pred_nd, discrim_output],
                                                              label=[gt_nd]))
-    
     pred_grad_ordinary = loss_net.get_input_grads()[0]
     discrim_net.backward(out_grads=[loss_net.get_input_grads()[1]])
     pred_grad_gan = discrim_net.get_input_grads()[0]
+    grad_ratio = pred_grad_gan.norm().asscalar() / pred_grad_ordinary.norm().asscalar()
     #print(pred_grad_gan)
     pred_grad = pred_grad_ordinary + pred_grad_gan  # add up gradients computed from different path with respect to pred
 
@@ -647,8 +672,9 @@ def train_step(batch_size, encoder_net, forecaster_net,
     loss_D_net.forward_backward(data_batch=mx.io.DataBatch(data=[discrim_output],
                                                             label=[label]))
     dis_loss += mx.nd.mean(loss_D_net.get_output_dict()['dis_output']).asscalar()
-    print(mx.nd.mean(loss_D_net.get_output_dict()['dis_output']).asscalar())
+    #print('fake loss:',mx.nd.mean(loss_D_net.get_output_dict()['dis_output']).asscalar())
     fake_grad = loss_D_net.get_input_grads()[0]
+    #print('fake output:',mx.nd.mean(discrim_output).asscalar())
     discrim_net.backward(out_grads=[fake_grad])
     temp_grad = [[grad.copyto(grad.context) for grad in grads] for grads in discrim_net._exec_group.grad_arrays]
     # true data
@@ -658,7 +684,8 @@ def train_step(batch_size, encoder_net, forecaster_net,
     loss_D_net.forward_backward(data_batch=mx.io.DataBatch(data=[discrim_output],
                                                             label=[label]))
     dis_loss += mx.nd.mean(loss_D_net.get_output_dict()['dis_output']).asscalar()
-    print(mx.nd.mean(loss_D_net.get_output_dict()['dis_output']).asscalar())
+    #print('true loss:',mx.nd.mean(loss_D_net.get_output_dict()['dis_output']).asscalar())
+    #print('true output:',mx.nd.mean(discrim_output).asscalar())
     true_grad = loss_D_net.get_input_grads()[0]
     discrim_net.backward(out_grads=[true_grad])
     # add them up
@@ -666,17 +693,16 @@ def train_step(batch_size, encoder_net, forecaster_net,
     for gradsr, gradsf in zip(discrim_net._exec_group.grad_arrays, temp_grad):
         for gradr, gradf in zip(gradsr, gradsf):
             gradr += gradf 
-    discriminator_grad_norm = discrim_net.clip_by_global_norm(max_norm=cfg.MODEL.TRAIN.GRAD_CLIP)
+    discriminator_grad_norm = discrim_net.clip_by_global_norm(max_norm=cfg.MODEL.TRAIN.GRAD_CLIP_DIS)
     #print(discrim_net._exec_group.grad_arrays)
     discrim_net.update()
     discrim_net.spectral_normalize()
-
     dis_loss = dis_loss / 2
     loss_dict['dis_output'] = dis_loss
     loss_str = ", ".join(["%s=%g" %(k, v) for k, v in loss_dict.items()])
     if iter_id is not None:
-        logging.info("Iter:%d, %s, e_gnorm=%g, f_gnorm=%g, d_gnorm=%g"
-                     % (iter_id, loss_str, encoder_grad_norm, forecaster_grad_norm, discriminator_grad_norm))
+        logging.info("Iter:%d, %s,\n e_gnorm=%g, f_gnorm=%g, d_gnorm=%g, gan:other=%g"
+                     % (iter_id, loss_str, encoder_grad_norm, forecaster_grad_norm, discriminator_grad_norm, grad_ratio))
 
     return init_states, loss_dict
 

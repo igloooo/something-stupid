@@ -8,11 +8,13 @@ from nowcasting.operators.common import grid_generator
 
 
 class PredictionBaseFactory(object):
-    def __init__(self, batch_size, in_seq_len, out_seq_len, height, width, name="forecaster"):
+    def __init__(self, batch_size, in_seq_len, out_seq_len, height, width, frame_stack=1, ctx_num=1,  name="forecaster"):
         self._out_typ = cfg.MODEL.OUT_TYPE
         self._batch_size = batch_size
+        self._ctx_num = ctx_num
         self._in_seq_len = in_seq_len
         self._out_seq_len = out_seq_len
+        self._frame_stack = frame_stack
         self._height = height
         self._width = width
         self._name = name
@@ -20,12 +22,16 @@ class PredictionBaseFactory(object):
         self.rnn_list = self._init_rnn()
         self._reset_rnn()
 
-    def _pre_encode_frame(self, frame_data, seqlen):
+    def _pre_encode_frame(self, frame_data, seqlen, frame_stack=1):
+        # suppose layout (T, N, C, H, W)
+        frame_data = frame_data.transpose([1,0,2,3,4])
+        frame_data = frame_data.reshape([0, seqlen//frame_stack, frame_stack, 0, 0])
+        frame_data = frame_data.transpose([1,0,2,3,4])
         ret = mx.sym.Concat(frame_data,
                              mx.sym.broadcast_to(mx.sym.expand_dims(self._spatial_grid, axis=0),
-                                                 shape=(seqlen, self._batch_size,
+                                                 shape=(seqlen//frame_stack, self._batch_size,
                                                         2, self._height, self._width)),
-                             mx.sym.ones(shape=(seqlen, self._batch_size, 1,
+                             mx.sym.ones(shape=(seqlen//frame_stack, self._batch_size, 1,
                                                 self._height, self._width)),
                              num_args=3, dim=2)
         return ret
