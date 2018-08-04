@@ -630,8 +630,8 @@ def train_step(batch_size, encoder_net, forecaster_net,
     else:
         forecaster_net.forward(is_train=True,
                             data_batch=mx.io.DataBatch(data=init_states.get_forecaster_states()))
-    forecaster_outputs = forecaster_net.get_outputs()
-    pred_nd = forecaster_outputs[0]
+    forecaster_output = forecaster_net.get_outputs()
+    pred_nd = forecaster_output[0]
     
     discrim_net.forward(is_train=True,
                         data_batch=mx.io.DataBatch(data=[pred_nd]))
@@ -665,45 +665,55 @@ def train_step(batch_size, encoder_net, forecaster_net,
     forecaster_net.update()
     encoder_net.update()
     
-    # train the discriminator
-    dis_loss = 0.0
-    label = mx.nd.zeros_like(discrim_output)
-    # fake data
-    loss_D_net.forward_backward(data_batch=mx.io.DataBatch(data=[discrim_output],
-                                                            label=[label]))
-    dis_loss += mx.nd.mean(loss_D_net.get_output_dict()['dis_output']).asscalar()
-    #print('fake loss:',mx.nd.mean(loss_D_net.get_output_dict()['dis_output']).asscalar())
-    fake_grad = loss_D_net.get_input_grads()[0]
-    #print('fake output:',mx.nd.mean(discrim_output).asscalar())
-    discrim_net.backward(out_grads=[fake_grad])
-    temp_grad = [[grad.copyto(grad.context) for grad in grads] for grads in discrim_net._exec_group.grad_arrays]
-    # true data
-    label[:] = 1.0
-    discrim_net.forward(data_batch=mx.io.DataBatch(data=[gt_nd]))
-    discrim_output = discrim_net.get_outputs()[0]
-    loss_D_net.forward_backward(data_batch=mx.io.DataBatch(data=[discrim_output],
-                                                            label=[label]))
-    dis_loss += mx.nd.mean(loss_D_net.get_output_dict()['dis_output']).asscalar()
-    #print('true loss:',mx.nd.mean(loss_D_net.get_output_dict()['dis_output']).asscalar())
-    #print('true output:',mx.nd.mean(discrim_output).asscalar())
-    true_grad = loss_D_net.get_input_grads()[0]
-    discrim_net.backward(out_grads=[true_grad])
-    # add them up
-  
-    for gradsr, gradsf in zip(discrim_net._exec_group.grad_arrays, temp_grad):
-        for gradr, gradf in zip(gradsr, gradsf):
-            gradr += gradf 
-    discriminator_grad_norm = discrim_net.clip_by_global_norm(max_norm=cfg.MODEL.TRAIN.GRAD_CLIP_DIS)
-    #print(discrim_net._exec_group.grad_arrays)
-    discrim_net.update()
-    discrim_net.spectral_normalize()
-    dis_loss = dis_loss / 2
-    loss_dict['dis_output'] = dis_loss
     loss_str = ", ".join(["%s=%g" %(k, v) for k, v in loss_dict.items()])
     if iter_id is not None:
-        logging.info("Iter:%d, %s,\n e_gnorm=%g, f_gnorm=%g, d_gnorm=%g, gan:other=%g"
-                     % (iter_id, loss_str, encoder_grad_norm, forecaster_grad_norm, discriminator_grad_norm, grad_ratio))
+        logging.info("Iter:%d, %s, e_gnorm=%g, f_gnorm=%g, gan:other=%g"
+                     % (iter_id, loss_str, encoder_grad_norm, forecaster_grad_norm, grad_ratio))
 
+    # train the discriminator
+    loss_dict['dis_output'] = 0.0
+    for dis_iter in range(cfg.MODEL.TRAIN.DISCRIM_LOOP):   
+        dis_loss = 0.0
+        if dis_iter > 0:
+            discrim_net.forward(is_train=True,
+                            data_batch=mx.io.DataBatch(data=[pred_nd]))
+            discrim_output = discrim_net.get_outputs()[0]
+        label = mx.nd.zeros_like(discrim_output)
+        # fake data
+        loss_D_net.forward_backward(data_batch=mx.io.DataBatch(data=[discrim_output],
+                                                                label=[label]))
+        dis_loss += mx.nd.mean(loss_D_net.get_output_dict()['dis_output']).asscalar()
+        #print('fake loss:',mx.nd.mean(loss_D_net.get_output_dict()['dis_output']).asscalar())
+        fake_grad = loss_D_net.get_input_grads()[0]
+        #print('fake output:',mx.nd.mean(discrim_output).asscalar())
+        discrim_net.backward(out_grads=[fake_grad])
+        temp_grad = [[grad.copyto(grad.context) for grad in grads] for grads in discrim_net._exec_group.grad_arrays]
+        # true data
+        label[:] = 1.0
+        discrim_net.forward(data_batch=mx.io.DataBatch(data=[gt_nd]))
+        discrim_output = discrim_net.get_outputs()[0]
+        loss_D_net.forward_backward(data_batch=mx.io.DataBatch(data=[discrim_output],
+                                                                label=[label]))
+        dis_loss += mx.nd.mean(loss_D_net.get_output_dict()['dis_output']).asscalar()
+        #print('true loss:',mx.nd.mean(loss_D_net.get_output_dict()['dis_output']).asscalar())
+        #print('true output:',mx.nd.mean(discrim_output).asscalar())
+        true_grad = loss_D_net.get_input_grads()[0]
+        discrim_net.backward(out_grads=[true_grad])
+        # add them up
+    
+        for gradsr, gradsf in zip(discrim_net._exec_group.grad_arrays, temp_grad):
+            for gradr, gradf in zip(gradsr, gradsf):
+                gradr += gradf 
+        discriminator_grad_norm = discrim_net.clip_by_global_norm(max_norm=cfg.MODEL.TRAIN.GRAD_CLIP_DIS)
+        #print(discrim_net._exec_group.grad_arrays)
+        discrim_net.update()
+        discrim_net.spectral_normalize()
+        dis_loss = dis_loss / 2
+        logging.info("    subiter:%d, dis_loss:%g d_norm:%g"%(dis_iter, dis_loss, discriminator_grad_norm))
+        loss_dict['dis_output'] += dis_loss
+
+    loss_dict['dis_output'] /= cfg.MODEL.TRAIN.DISCRIM_LOOP
+    
     return init_states, loss_dict
 
 '''
