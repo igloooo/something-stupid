@@ -633,10 +633,13 @@ def train_step(batch_size, encoder_net, forecaster_net,
     forecaster_output = forecaster_net.get_outputs()
     pred_nd = forecaster_output[0]
     
-    discrim_net.forward(is_train=True,
+    if cfg.MODEL.GAN_G_LAMBDA > 0:
+        discrim_net.forward(is_train=True,
                         data_batch=mx.io.DataBatch(data=[pred_nd]))
-    discrim_output = discrim_net.get_outputs()[0]
-    
+        discrim_output = discrim_net.get_outputs()[0]
+    else:
+        discrim_output = mx.nd.zeros((batch_size,))
+
     # Calculate the gradient of the loss functions
     if cfg.MODEL.ENCODER_FORECASTER.HAS_MASK:
         loss_net.forward_backward(data_batch=mx.io.DataBatch(data=[pred_nd, discrim_output],
@@ -645,11 +648,16 @@ def train_step(batch_size, encoder_net, forecaster_net,
         loss_net.forward_backward(data_batch=mx.io.DataBatch(data=[pred_nd, discrim_output],
                                                              label=[gt_nd]))
     pred_grad_ordinary = loss_net.get_input_grads()[0]
-    discrim_net.backward(out_grads=[loss_net.get_input_grads()[1]])
-    pred_grad_gan = discrim_net.get_input_grads()[0]
-    grad_ratio = pred_grad_gan.norm().asscalar() / pred_grad_ordinary.norm().asscalar()
-    #print(pred_grad_gan)
-    pred_grad = pred_grad_ordinary + pred_grad_gan  # add up gradients computed from different path with respect to pred
+    
+    if cfg.MODEL.GAN_G_LAMBDA > 0:
+        discrim_net.backward(out_grads=[loss_net.get_input_grads()[1]])
+        pred_grad_gan = discrim_net.get_input_grads()[0]
+        grad_ratio = pred_grad_gan.norm().asscalar() / pred_grad_ordinary.norm().asscalar()
+        #print(pred_grad_gan)
+        pred_grad = pred_grad_ordinary + pred_grad_gan  # add up gradients computed from different path with respect to pred
+    else:
+        pred_grad = pred_grad_ordinary
+        grad_ratio = -1.0
 
     loss_dict = loss_net.get_output_dict()
     for k in loss_dict:
@@ -669,6 +677,9 @@ def train_step(batch_size, encoder_net, forecaster_net,
     if iter_id is not None:
         logging.info("Iter:%d, %s, e_gnorm=%g, f_gnorm=%g, gan:other=%g"
                      % (iter_id, loss_str, encoder_grad_norm, forecaster_grad_norm, grad_ratio))
+    
+    if cfg.MODEL.GAN_G_LAMBDA == 0:
+        return init_states, loss_dict
 
     # train the discriminator
     loss_dict['dis_output'] = 0.0

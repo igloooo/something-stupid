@@ -177,6 +177,10 @@ def train(args):
     loss_net.summary()
     discrim_net.summary()
     loss_D_net.summary()
+    if cfg.MODEL.GAN_G_LAMBDA > 0:
+        loss_types = ('mse','gdl','gan','dis')
+    else:
+        loss_types = ('mse', 'gdl')
     # try to load checkpoint
     if args.resume:
         start_iter_id = latest_iter_id(base_dir)
@@ -192,12 +196,16 @@ def train(args):
             train_loss_dicts = pickle.load(f)
         with open(os.path.join(base_dir, 'valid_loss_dicts.pkl'), 'rb') as f:
             valid_loss_dicts = pickle.load(f)
+        for dicts in (train_loss_dicts, valid_loss_dicts):
+            for k in dicts.keys():
+                if k not in loss_types:
+                    del dicts[k]
     else:
         start_iter_id = 0
         train_loss_dicts = {}
         valid_loss_dicts = {}
         for dicts in (train_loss_dicts, valid_loss_dicts):
-            for typ in ('mse','gdl','gan','dis'):
+            for typ in loss_types:
                 dicts[typ] = []
 
     states = EncoderForecasterStates(factory=szo_nowcasting, ctx=args.ctx[0])
@@ -237,38 +245,12 @@ def train(args):
             data_nd_v = frame_dat_v[0:cfg.MODEL.IN_LEN,:,:,:,:] / 255.0
             gt_nd_v = frame_dat_v[cfg.MODEL.IN_LEN:(cfg.MODEL.IN_LEN+cfg.MODEL.OUT_LEN),:,:,:,:] / 255.0
             mask_nd_v = mx.nd.ones_like(gt_nd_v)
-            states.reset_all()
-            pred_nd_v = get_prediction(data_nd_v, states, encoder_net, forecaster_net)
-            discrim_net.forward(data_batch=mx.io.DataBatch(data=[pred_nd_v]))
-            discrim_output = discrim_net.get_outputs()[0]
-            loss_net.forward(data_batch=mx.io.DataBatch(data=[pred_nd_v, discrim_output],
-                                                        label=[gt_nd_v, mask_nd_v]))
-            loss_D_net.forward(data_batch=mx.io.DataBatch(data=[discrim_output],
-                                                        label=[mx.nd.zeros_like(discrim_output)]))
-            discrim_loss = mx.nd.mean(loss_D_net.get_outputs()[0]).asscalar()
-            discrim_net.forward(data_batch=mx.io.DataBatch(data=[gt_nd_v]))
-            discrim_output = discrim_net.get_outputs()[0]
-            loss_D_net.forward(data_batch=mx.io.DataBatch(data=[discrim_output],
-                                                        label=[mx.nd.ones_like(discrim_output)]))
-            discrim_loss += mx.nd.mean(discrim_net.get_outputs()[0]).asscalar()
-            discrim_loss = discrim_loss / 2
-            for k in valid_loss_dicts.keys():
-                if k == 'dis':
-                    if discrim_loss > 1.0:
-                        loss = 1.0
-                    else:        
-                        loss = discrim_loss
-                elif k == 'gan':
-                    loss = mx.nd.mean(loss_net.get_output_dict()[k+'_output']).asscalar()
-                    if loss > 1.0:
-                        loss = 1.0
-                else:
-                    loss = mx.nd.mean(loss_net.get_output_dict()[k+'_output']).asscalar()
-                if loss < 0:
-                    loss = 0
-                valid_loss_dicts[k].append(loss)
-            loss_str = ", ".join(["%s=%g" %(k, v[-1]) for k, v in valid_loss_dicts.items()])
-            logging.info("iter {}, validation, {}".format(iter_id, loss_str))
+            valid_step(batch_size=cfg.MODEL.TRAIN.BATCH_SIZE,
+                    encoder_net=encoder_net, forecaster_net=forecaster_net,
+                    loss_net=loss_net, discrim_net=discrim_net,
+                    loss_D_net=loss_D_net, init_states=states,
+                    data_nd=data_nd_v, gt_nd=gt_nd_v, mask_nd=mask_nd_v,
+                    valid_loss_dicts=valid_loss_dicts, iter_id=iter_id)
             for k in valid_loss_dicts.keys():
                 plot_loss_curve(os.path.join(base_dir, 'valid_'+k+'_loss'), valid_loss_dicts[k])
             
@@ -344,6 +326,54 @@ def train(args):
                 pickle.dump(valid_loss_dicts, f)
         iter_id += 1
         
+def valid_step(batch_size, encoder_net, forecaster_net,
+               loss_net, discrim_net, loss_D_net, init_states,
+               data_nd, gt_nd, mask_nd, valid_loss_dicts, iter_id=None):
+    '''
+    valid_loss_dicts: dict<list>
+    '''
+    init_states.reset_all()
+    pred_nd = get_prediction(data_nd, init_states, encoder_net, forecaster_net)
+    
+    if cfg.MODEL.GAN_G_LAMBDA > 0:
+        discrim_net.forward(data_batch=mx.io.DataBatch(data=[pred_nd]))
+        discrim_output = discrim_net.get_outputs()[0]
+    else:
+        discrim_output = mx.nd.zeros((batch_size,))
+
+    loss_net.forward(data_batch=mx.io.DataBatch(data=[pred_nd, discrim_output],
+                                                label=[gt_nd, mask_nd]))
+
+    if cfg.MODEL.GAN_G_LAMBDA > 0:                                         
+        loss_D_net.forward(data_batch=mx.io.DataBatch(data=[discrim_output],
+                                                label=[mx.nd.zeros_like(discrim_output)]))
+        discrim_loss = mx.nd.mean(loss_D_net.get_outputs()[0]).asscalar()
+        discrim_net.forward(data_batch=mx.io.DataBatch(data=[gt_nd]))
+        discrim_output = discrim_net.get_outputs()[0]
+        loss_D_net.forward(data_batch=mx.io.DataBatch(data=[discrim_output],
+                                                    label=[mx.nd.ones_like(discrim_output)]))
+        discrim_loss += mx.nd.mean(discrim_net.get_outputs()[0]).asscalar()
+        discrim_loss = discrim_loss / 2
+    for k in valid_loss_dicts.keys():
+        if k == 'dis':
+            if discrim_loss > 1.0:
+                loss = 1.0
+            else:        
+                loss = discrim_loss
+        elif k == 'gan':
+            loss = mx.nd.mean(loss_net.get_output_dict()[k+'_output']).asscalar()
+            if loss > 1.0:
+                loss = 1.0
+        else:
+            loss = mx.nd.mean(loss_net.get_output_dict()[k+'_output']).asscalar()
+        if loss < 0:
+            loss = 0
+        valid_loss_dicts[k].append(loss)
+    loss_str = ", ".join(["%s=%g" %(k, v[-1]) for k, v in valid_loss_dicts.items()])
+    logging.info("iter {}, validation, {}".format(iter_id, loss_str))
+
+    return init_states, valid_loss_dicts
+
 def predict(args, num_samples):
     assert cfg.MODEL.FRAME_STACK == 1 and cfg.MODEL.FRAME_SKIP == 1
     assert len(args.ctx) == 1
