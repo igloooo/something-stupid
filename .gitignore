@@ -97,7 +97,6 @@ related-paper/
 *.gif
 *.pkl
 *.params
-*.yml
 *.json
 *.mp4
 analyze_training_log.ipynb
