@@ -112,11 +112,9 @@ __C.SZO = edict()
 __C.SZO.DATA = edict()
 __C.SZO.DATA.SIZE = 500
 __C.SZO.DATA.TOTAL_LEN = 61
-__C.SZO.DATA.RADAR_RANGE = 80.0
 
 __C.SZO.ITERATOR = edict()
 __C.SZO.ITERATOR.DOWN_RATIO = 1
-__C.SZO.ITERATOR.RESCALE_RANGE = 80.0  # when doing calculation, converted to [0,1]
 assert __C.SZO.DATA.SIZE % __C.SZO.ITERATOR.DOWN_RATIO == 0
 __C.SZO.ITERATOR.RESIZED_SIZE = __C.SZO.DATA.SIZE // __C.SZO.ITERATOR.DOWN_RATIO
 #__C.SZO.ITERATOR.FILTER_RAINFALL = True           # Whether to discard part of the rainfall, has a denoising effect
@@ -179,8 +177,12 @@ __C.MODEL.GDL_LAMBDA = 0.0
 __C.MODEL.USE_SEASONALITY = False          # Whether to use seasonality
 __C.MODEL.GAN_G_LAMBDA = 0.2
 __C.MODEL.GAN_D_LAMBDA = 0.2
-__C.MODEL.BALANCE_FACTOR = 0.15
 
+__C.MODEL.DATA_MODE = 'rescaled'  # 'rescaled' or 'original'
+__C.MODEL.BALANCE_FACTOR = 0.15  # under 'original' mode
+__C.MODEL.THRESHOLDS = (30,)  #(0.5, 2, 5, 10, 30)  # under 'rescaled mode'
+__C.MODEL.BALANCING_WEIGHTS = (1,1)  #(1, 1, 2, 5, 10, 30)  # The corresponding balancing weights
+__C.MODEL.DISPLAY_EPSILON = 5.0  # under 'rescaled mode'
 
 __C.MODEL.TRAJRNN = edict()
 __C.MODEL.TRAJRNN.INIT_GRID = True

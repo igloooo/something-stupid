@@ -90,27 +90,52 @@ def get_prediction(data_nd, states, encoder_net, forecaster_net):
                             data_batch=mx.io.DataBatch(data=states.get_forecaster_states()))
     return forecaster_net.get_outputs()[0]
 
-def save_prediction(data_nd, target_nd, pred_nd, path, convert_to_0_255=True):
-    # shape (seqlen, batch_size=1, channel=1, height, width)
-    # *255 and converted to numpy
-    if not convert_to_0_255:
-    # remain 0-80, uint8
-        data_np = data_nd.asnumpy().astype(np.uint8)
-        target_np = target_nd.asnumpy().astype(np.uint8)
-        pred_np = pred_nd.asnumpy().astype(np.uint8)
+def save_prediction(data_nd, target_nd, pred_nd, path, default_as_0=False):
+    """
+    mx.nd.NDArray
+    shape (seqlen, batch_size=1, channel=1, height, width)
+    pixel value [0,255] np.float32
+    if default_as_0 is true, default value will be 0, otherwise
+    they will be 255
+    """
+    epsilon = cfg.MODEL.DISPLAY_EPSILON
+    if cfg.MODEL.DATA_MODE == 'original':
+        if not default_as_0:
+        # remain 0-80, uint8
+            data_np = data_nd.asnumpy().astype(np.uint8)
+            target_np = target_nd.asnumpy().astype(np.uint8)
+            pred_np = pred_nd.asnumpy().astype(np.uint8)
+        else:
+        # convert 0-80 to 0-255, uint8
+            scale_fac = 255.0 / 80.0
+            data_np = data_nd.asnumpy()
+            target_np = target_nd.asnumpy()
+            pred_np = pred_nd.asnumpy()
+            data_np = data_np * (data_np<=80.0)
+            target_np = target_np * (target_np<=80.0)
+            pred_np = pred_np * (pred_np<=80.0)
+            data_np = (data_np * scale_fac).astype(np.uint8)
+            target_np = (target_np * scale_fac).astype(np.uint8)
+            pred_np = (pred_np * scale_fac).astype(np.uint8)
+    elif cfg.MODEL.DATA_MODE == 'rescaled':
+        if not default_as_0:
+            data_np = data_nd.asnumpy()
+            target_np = target_nd.asnumpy()
+            pred_np = pred_nd.asnumpy()
+            for np_arr in (data_np, target_np, pred_np):
+                mask = np_arr < epsilon
+                np_arr *= (80/255)*(1-mask)
+                np_arr += mask*255.0
+            data_np = data_np.astype(np.uint8)
+            target_np = target_np.astype(np.uint8)
+            pred_np = pred_np.astype(np.uint8)
+        else:
+            data_np = data_nd.asnumpy().astype(np.uint8)
+            target_np = target_nd.asnumpy().astype(np.uint8)
+            pred_np = pred_nd.asnumpy().astype(np.uint8)
     else:
-    # convert 0-80 to 0-255, uint8
-        scale_fac = 255.0 / cfg.SZO.DATA.RADAR_RANGE
-        data_np = data_nd.asnumpy()
-        target_np = target_nd.asnumpy()
-        pred_np = pred_nd.asnumpy()
-        data_np = data_np * (data_np<cfg.SZO.DATA.RADAR_RANGE)
-        target_np = target_np * (target_np<cfg.SZO.DATA.RADAR_RANGE)
-        pred_np = pred_np * (pred_np<cfg.SZO.DATA.RADAR_RANGE)
-        data_np = (data_np * scale_fac).astype(np.uint8)
-        target_np = (target_np * scale_fac).astype(np.uint8)
-        pred_np = (pred_np * scale_fac).astype(np.uint8)
-    
+        raise NotImplementedError
+
     inputs = data_np
     ground_truth = target_np
     predictions = pred_np
@@ -286,8 +311,8 @@ def train(args):
             data_nd = (data_nd*255.0).clip(0, 255.0)
             target_nd = (target_nd*255.0).clip(0, 255.0)
             pred_nd = (pred_nd*255.0).clip(0, 255.0)
-            save_prediction(data_nd[:,0,0,:,:], target_nd[:,0,0,:,:], pred_nd[:,0,0,:,:], display_path1)
-            save_prediction(data_nd[:,0,0,:,:], target_nd[:,0,0,:,:], pred_nd[:,0,0,:,:], display_path2, convert_to_0_255=False)
+            save_prediction(data_nd[:,0,0,:,:], target_nd[:,0,0,:,:], pred_nd[:,0,0,:,:], display_path1, default_as_0=True)
+            save_prediction(data_nd[:,0,0,:,:], target_nd[:,0,0,:,:], pred_nd[:,0,0,:,:], display_path2, default_as_0=False)
         '''
         if (iter_id+1) % cfg.MODEL.TEMP_SAVE_ITER == 0:
             epoch = (iter_id//cfg.MODEL.SAVE_ITER)*cfg.MODEL.SAVE_ITER - 1
@@ -374,8 +399,12 @@ def valid_step(batch_size, encoder_net, forecaster_net,
 
     return init_states, valid_loss_dicts
 
-def predict(args, num_samples):
-    assert cfg.MODEL.FRAME_STACK == 1 and cfg.MODEL.FRAME_SKIP == 1
+def predict(args, num_samples, mode='display'):
+    """
+    mode can be either display or save
+    under display mode, num_samples gifs and comparisons are saved.
+    under save mode, num_samples sequence of pngs are saved in difference directories
+    """
     assert len(args.ctx) == 1
     base_dir = get_base_dir(args)
     szo_iterator = SZOIterator(rec_paths=cfg.SZO_TRAIN_DATA_PATHS,
@@ -389,7 +418,7 @@ def predict(args, num_samples):
                                           in_seq_len=cfg.MODEL.IN_LEN,
                                           out_seq_len=cfg.MODEL.OUT_LEN)
 
-    encoder_net, forecaster_net, loss_net = \
+    encoder_net, forecaster_net, loss_net, discrim_net, loss_D_net = \
         encoder_forecaster_build_networks(
             factory=szo_nowcasting,
             context=args.ctx)
@@ -422,8 +451,8 @@ def predict(args, num_samples):
         data_nd = (data_nd*255.0).clip(0, 255.0)
         target_nd = (target_nd*255.0).clip(0, 255.0)
         pred_nd = (pred_nd*255.0).clip(0, 255.0)
-        save_prediction(data_nd[:,0,0,:,:], target_nd[:,0,0,:,:], pred_nd[:,0,0,:,:], display_path1)
-        save_prediction(data_nd[:,0,0,:,:], target_nd[:,0,0,:,:], pred_nd[:,0,0,:,:], display_path2, convert_to_0_255=False)
+        save_prediction(data_nd[:,0,0,:,:], target_nd[:,0,0,:,:], pred_nd[:,0,0,:,:], display_path1, default_as_0=True)
+        save_prediction(data_nd[:,0,0,:,:], target_nd[:,0,0,:,:], pred_nd[:,0,0,:,:], display_path2, default_as_0=False)
         plt.hist(pred_nd.asnumpy().reshape([-1]), bins=100)
         plt.savefig(os.path.join(base_dir, 'hist'+str(i)))
         plt.close()

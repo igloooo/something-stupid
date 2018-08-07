@@ -10,23 +10,29 @@ from nowcasting.ops import *
 
 
 def get_loss_weight_symbol(data, mask, seq_len):
+    """
+    data, mask, seq_len are symbols, pixel values [0,255] np.float32
+    return weights have the same shape as data and mask, np.float32
+    """
     # use symbol here, since it's part of the network!!!
     if cfg.MODEL.USE_BALANCED_LOSS:
-        '''
-        balancing_weights = cfg.SZO.EVALUATION.BALANCING_WEIGHTS
-        weights = mx.sym.ones_like(data) * balancing_weights[0]
-        thresholds = [ele / 255.0 for ele in cfg.SZO.EVALUATION.THRESHOLDS]
-        for i, threshold in enumerate(thresholds):
-            weights = weights + (balancing_weights[i + 1] - balancing_weights[i]) * (data >= threshold)
-        weights = weights * mask
-        '''
-        epsilon = 10**(-3)
-        assert cfg.SZO.ITERATOR.DOWN_RATIO == 1.0
-        thresh_mat = data<1.0
-        data_size = cfg.MODEL.OUT_LEN*cfg.MODEL.TRAIN.BATCH_SIZE*cfg.SZO.DATA.SIZE**2
-        ratio = mx.symbol.sum(thresh_mat)/data_size
-        assert (ratio < 1.0) and (ratio > 0.0)
-        weights = (mx.sym.broadcast_mul(thresh_mat, (cfg.MODEL.BALANCE_FACTOR/(ratio+epsilon))) + mx.sym.broadcast_mul(1-thresh_mat, (1-cfg.MODEL.BALANCE_FACTOR)/(1-ratio+epsilon))) / 2 #* mask            
+        if cfg.MODEL.DATA_MODE == 'rescaled':
+            balancing_weights = cfg.MODEL.BALANCING_WEIGHTS
+            weights = mx.sym.ones_like(data) * balancing_weights[0]
+            thresholds = [ele / 255.0 for ele in cfg.MODEL.THRESHOLDS]
+            for i, threshold in enumerate(thresholds):
+                weights = weights + (balancing_weights[i + 1] - balancing_weights[i]) * (data >= threshold)
+            weights = weights * mask
+        elif cfg.MODEL.DATA_MODE == 'original':
+            epsilon = 10**(-3)
+            assert cfg.SZO.ITERATOR.DOWN_RATIO == 1.0
+            thresh_mat = data<1.0
+            data_size = cfg.MODEL.OUT_LEN*cfg.MODEL.TRAIN.BATCH_SIZE*cfg.SZO.DATA.SIZE**2
+            ratio = mx.symbol.sum(thresh_mat)/data_size
+            assert (ratio < 1.0) and (ratio > 0.0)
+            weights = (mx.sym.broadcast_mul(thresh_mat, (cfg.MODEL.BALANCE_FACTOR/(ratio+epsilon))) + mx.sym.broadcast_mul(1-thresh_mat, (1-cfg.MODEL.BALANCE_FACTOR)/(1-ratio+epsilon))) / 2 #* mask
+        else:
+            raise NotImplementedError
     else:
         weights = mask
     if cfg.MODEL.TEMPORAL_WEIGHT_TYPE == "same":

@@ -27,8 +27,8 @@ class SZOIterator:
         self.out_len = out_len
         self.batch_size = batch_size
         self.frame_skip = frame_skip
-        self.height = cfg.SZO.DATA.SIZE // cfg.SZO.ITERATOR.DOWN_RATIO
-        self.width = cfg.SZO.DATA.SIZE // cfg.SZO.ITERATOR.DOWN_RATIO
+        #self.height = cfg.SZO.DATA.SIZE // cfg.SZO.ITERATOR.DOWN_RATIO
+        #self.width = cfg.SZO.DATA.SIZE // cfg.SZO.ITERATOR.DOWN_RATIO
         self.dataset_ind = 0
         self.image_iterator = mx.io.ImageRecordIter(
                                     path_imgrec=self.rec_paths[self.dataset_ind],
@@ -44,6 +44,12 @@ class SZOIterator:
             self.ctx = ctx    
 
     def sample(self):    
+        """
+        return tensor of 
+        shape [self.in_len+self.out_len, self.batch_size, 1, cfg.SZO.DATA.SIZE, cfg.SZO.DATA.SIZE]
+        pixel value [0,255] np.float32
+        context self.ctx
+        """
         try:
             batch = self.image_iterator.next()
         except StopIteration:
@@ -55,8 +61,7 @@ class SZOIterator:
         ret_len = self.in_len + self.out_len
         shift = random.randint(0, cfg.SZO.DATA.TOTAL_LEN - ret_len*self.frame_skip)
         frames = frames[shift:(shift+ret_len*self.frame_skip):self.frame_skip,:,:,:,:]
-        #masks = (frames <= cfg.SZO.DATA.RADAR_RANGE).astype(np.float32)       
-        return frames.as_in_context(self.ctx)#, masks.as_in_context(self.ctx)
+        return frames.as_in_context(self.ctx)
 
     def reset(self):
         # first check if file list has been updated
@@ -81,12 +86,13 @@ class SZOIterator:
                                     batch_size = self.batch_size*cfg.SZO.DATA.TOTAL_LEN,
                                     )
         self.image_iterator.reset()
-
+    '''
     def resize(self, arr_nd):
         # the array should be of shape (seqlen*batch_size, channel, height, width)
         arr_nd = mx.nd.contrib.BilinearResize2D(arr_nd, self.height, self.width)
         arr_nd = arr_nd.reshape([cfg.SZO.DATA.TOTAL_LEN, 1, self.height, self.width])
         return arr_nd
+    '''
 
     def get_num_frames(self):
         return self.in_len + self.out_len
@@ -120,7 +126,10 @@ def test_speed(batch_size, repeat_times):
                                         * repeat_times / float(end - begin)))
 
 def save_png_sequence(np_seqs, path):
-    # np_seq of shape (seqlen, H, W)
+    """
+    np_seqs has shape (seqlen, H, W), pixel value [0,255], np.uint8
+    path is save path
+    """
     if not isinstance(np_seqs, list):
         np_seqs = [np_seqs]
     num_seqs = len(np_seqs)
@@ -152,28 +161,34 @@ def save_gif_examples(num, train_iterator=None, save_path=None):
 
     for i in range(num):
         train_batch = train_iterator.sample()
-        
-        examples = train_batch[:,0,0,:,:].asnumpy().astype(np.uint8)
-        scaled_examples = ((examples*(examples<255))*(255/80)).astype(np.uint8)
+        if cfg.MODEL.DATA_MODE == 'original':
+            wb_examples = train_batch[:,0,0,:,:].asnumpy().astype(np.uint8)
+            bb_examples = ((wb_examples*(wb_examples<255))*(255/80)).astype(np.uint8)
+        elif cfg.MODEL.DATA_MODE == 'rescaled':
+            epsilon = cfg.MODEL.DISPLAY_EPSILON
+            bb_examples = train_batch[:,0,0,:,:].asnumpy()
+            bb_examples = bb_examples.astype(np.uint8)
+            mask = bb_examples<epsilon
+            wb_examples = (bb_examples*(1-mask)*(80/255) + mask*255).astype(np.uint8)
+        else:
+            raise NotImplementedError
 
         if not os.path.exists(save_path):
             os.makedirs(save_path)
 
-        original_name_str = os.path.join(save_path, 'original')
-        scaled_name_str = os.path.join(save_path, 'scaled')
+        wb_name_str = os.path.join(save_path, 'white_back')
+        bb_name_str = os.path.join(save_path, 'black_back')
 
-        save_hko_gif(examples, save_path=original_name_str +str(i) + '.gif', multiply_by_255=False)
-        save_hko_gif(scaled_examples, save_path=scaled_name_str + str(i) + '.gif', multiply_by_255=False)
-        #save_hko_gif((train_batch[:, 0, 0, :, :]*train_mask[:, 0, 0, :, :]).asnumpy().astype(np.uint8),
-        #save_hko_gif(train_mask[:, 0, 0, :, :].asnumpy().astype(np.uint8) * 255,
-        #             save_path=name_str + '_mask.gif')
-        save_png_sequence(examples, path=original_name_str+'_'+str(i)+'.png')
-        save_png_sequence(scaled_examples, path=scaled_name_str+'_'+str(i)+'.png')
+        save_hko_gif(wb_examples, save_path=wb_name_str +str(i) + '.gif', multiply_by_255=False)
+        save_hko_gif(bb_examples, save_path=bb_name_str + str(i) + '.gif', multiply_by_255=False)
+
+        save_png_sequence(wb_examples, path=wb_name_str+'_'+str(i)+'.png')
+        save_png_sequence(bb_examples, path=bb_name_str+'_'+str(i)+'.png')
 
 # Simple test for the performance of the HKO iterator.
 if __name__ == '__main__':
     np.random.seed(123)
-    
+    '''
     rec_path = os.path.join(cfg.ROOT_DIR, 'szo_data', 'train', 'TRAIN_1_2.rec')
     save_path = 'data_display'
     train_iterator = SZOIterator(rec_paths=rec_path,
@@ -183,5 +198,5 @@ if __name__ == '__main__':
                                  frame_skip=6,  # 
                                  ctx=mx.gpu())
     save_gif_examples(20, train_iterator=train_iterator, save_path=save_path)
-     
-
+    '''
+    save_gif_examples(20)
