@@ -407,7 +407,7 @@ def predict(args, num_samples, mode='display'):
     """
     assert len(args.ctx) == 1
     base_dir = get_base_dir(args)
-    szo_iterator = SZOIterator(rec_paths=cfg.SZO_TRAIN_DATA_PATHS,
+    szo_iterator = SZOIterator(rec_paths=cfg.SZO_TEST_DATA_PATHS,
                                in_len=cfg.MODEL.IN_LEN,
                                out_len=cfg.MODEL.OUT_LEN,
                                batch_size=1,

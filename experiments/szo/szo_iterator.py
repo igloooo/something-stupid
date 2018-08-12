@@ -22,7 +22,7 @@ class SZOIterator:
             self.rec_paths = rec_paths
         else:
             self.rec_paths = [rec_paths]
-        assert (in_len + out_len)*frame_skip <= cfg.SZO.DATA.TOTAL_LEN, 'require a sequence that is too long'
+        assert (in_len + out_len-1)*frame_skip+1<= cfg.SZO.DATA.TOTAL_LEN, 'require a sequence that is too long'
         self.in_len = in_len
         self.out_len = out_len
         self.batch_size = batch_size
@@ -60,7 +60,8 @@ class SZOIterator:
             frames = frames.transpose([1,0,2,3,4]) # to make frames in a video appear consecutively
         ret_len = self.in_len + self.out_len
         shift = random.randint(0, cfg.SZO.DATA.TOTAL_LEN - ret_len*self.frame_skip)
-        frames = frames[shift:(shift+ret_len*self.frame_skip):self.frame_skip,:,:,:,:]
+        frames = frames[shift:(shift+(ret_len-1)*self.frame_skip+1):self.frame_skip,:,:,:,:]
+        assert frames.shape[0] == ret_len
         return frames.as_in_context(self.ctx)
 
     def reset(self):
