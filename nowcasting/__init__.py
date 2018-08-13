@@ -1,7 +1,7 @@
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(__file__,*([".."]*2))))
-from .config import *
+#from .config import *
 from .encoder_forecaster import *
 from .hko_benchmark import *
 from .hko_evaluation import *

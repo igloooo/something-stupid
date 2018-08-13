@@ -124,12 +124,13 @@ __C.SZO.ITERATOR.RESIZED_SIZE = __C.SZO.DATA.SIZE // __C.SZO.ITERATOR.DOWN_RATIO
 
 
 __C.SZO.EVALUATION = edict()
-__C.SZO.EVALUATION.BALANCING_WEIGHTS = (10, 1) #  (1, 1, 2, 5, 10, 30)  # The corresponding balancing weights
-__C.SZO.EVALUATION.THRESHOLDS = (80,)  # (0.5, 2, 5, 10, 30)
+__C.SZO.EVALUATION.THRESHOLD_WEIGHTS = (1, 2, 3, 4) #  (1, 1, 2, 5, 10, 30)  # The corresponding balancing weights
+__C.SZO.EVALUATION.THRESHOLDS = (10, 20, 30, 50)  # (0.5, 2, 5, 10, 30)
+__C.SZO.EVALUATION.TEMPORAL_WEIGHT_SLOPE = 0.1  # start with 1
 __C.SZO.EVALUATION.ZR = edict()
 __C.SZO.EVALUATION.ZR.a = 58.53  # The a factor in the Z-R relationship
 __C.SZO.EVALUATION.ZR.b = 1.56  # The b factor in the Z-R relationship
-
+__C.SZO.EVALUATION.CENTRAL_REGION = (120, 120, 360, 360)
 
 __C.MOVINGMNIST = edict()
 __C.MOVINGMNIST.DISTRACTOR_NUM = 0
@@ -180,8 +181,9 @@ __C.MODEL.GAN_D_LAMBDA = 0.2
 
 __C.MODEL.DATA_MODE = 'rescaled'  # 'rescaled' or 'original'
 __C.MODEL.BALANCE_FACTOR = 0.15  # under 'original' mode
-__C.MODEL.THRESHOLDS = (30,)  #(0.5, 2, 5, 10, 30)  # under 'rescaled mode'
-__C.MODEL.BALANCING_WEIGHTS = (1,1)  #(1, 1, 2, 5, 10, 30)  # The corresponding balancing weights
+# the following two don't have to be the same with SZO.EVALUATION._
+__C.MODEL.THRESHOLDS = (10, 20, 30, 50)  #(0.5, 2, 5, 10, 30)  # under 'rescaled mode'
+__C.MODEL.BALANCING_WEIGHTS = (1, 2, 4, 7, 11)  #(1, 1, 2, 5, 10, 30)  # The corresponding balancing weights
 __C.MODEL.DISPLAY_EPSILON = 5.0  # under 'rescaled mode'
 
 __C.MODEL.TRAJRNN = edict()

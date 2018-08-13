@@ -1,6 +1,6 @@
 import sys
 import os
-sys.path.append(os.path.abspath(os.path.join(__file__,*([".."]*3))))
+sys.path.append(os.path.abspath(os.path.join(__file__,*([".."]*2))))
 try:
     import cPickle as pickle
 except:
@@ -10,35 +10,8 @@ import logging
 import os
 from collections import namedtuple
 from nowcasting.config import cfg
-from nowcasting.hko_iterator import get_exclude_mask
 from nowcasting.helpers.msssim import _SSIMForMultiScale
-
-def pixel_to_dBZ(img):
-    """
-
-    Parameters
-    ----------
-    img : np.ndarray or float
-
-    Returns
-    -------
-
-    """
-    return img * 70.0 - 10.0
-
-
-def dBZ_to_pixel(dBZ_img):
-    """
-
-    Parameters
-    ----------
-    dBZ_img : np.ndarray
-
-    Returns
-    -------
-
-    """
-    return np.clip((dBZ_img + 10.0) / 70.0, a_min=0.0, a_max=1.0)
+from numba import jit, float32, boolean, int32, float64
 
 
 def pixel_to_rainfall(img, a=None, b=None):
@@ -46,7 +19,7 @@ def pixel_to_rainfall(img, a=None, b=None):
 
     Parameters
     ----------
-    img : np.ndarray
+    img : np.ndarray, between 0 and 1
     a : float32, optional
     b : float32, optional
 
@@ -54,14 +27,17 @@ def pixel_to_rainfall(img, a=None, b=None):
     -------
     rainfall_intensity : np.ndarray
     """
+    '''
     if a is None:
         a = cfg.SZO.EVALUATION.ZR.a
     if b is None:
         b = cfg.SZO.EVALUATION.ZR.b
-    dBZ = pixel_to_dBZ(img)
+    dBZ = img*80.0
     dBR = (dBZ - 10.0 * np.log10(a)) / b
     rainfall_intensity = np.power(10, dBR / 10.0)
-    return rainfall_intensity
+    return rainfall_intensity 
+    '''
+    return img * 80
 
 
 def rainfall_to_pixel(rainfall_intensity, a=None, b=None):
@@ -77,17 +53,19 @@ def rainfall_to_pixel(rainfall_intensity, a=None, b=None):
     -------
     pixel_vals : np.ndarray
     """
+    '''
     if a is None:
-        a = cfg.SZO.EVALUATION.ZR.a
+        a =cfg.SZO.EVALUATION.ZR.a
     if b is None:
         b = cfg.SZO.EVALUATION.ZR.b
     dBR = np.log10(rainfall_intensity) * 10.0
     dBZ = dBR * b + 10.0 * np.log10(a)
-    pixel_vals = (dBZ + 10.0) / 70.0
-    return pixel_vals
+    return dBZ / 80
+    '''
+    return rainfall_intensity / 80
 
 
-def get_hit_miss_counts(prediction, truth, mask=None, thresholds=None, sum_batch=False):
+def get_hit_miss_counts(prediction, truth, mask=None, thresholds=None):
     """This function calculates the overall hits and misses for the prediction, which could be used
     to get the skill scores and threat scores:
 
@@ -110,20 +88,20 @@ def get_hit_miss_counts(prediction, truth, mask=None, thresholds=None, sum_batch
     Returns
     -------
     hits : np.ndarray
-        (seq_len, len(thresholds)) or (seq_len, batch_size, len(thresholds))
+        (seq_len, batch_size, len(thresholds))
         TP
     misses : np.ndarray
-        (seq_len, len(thresholds)) or (seq_len, batch_size, len(thresholds))
+        (seq_len, batch_size, len(thresholds))
         FN
     false_alarms : np.ndarray
-        (seq_len, len(thresholds)) or (seq_len, batch_size, len(thresholds))
+        (seq_len, batch_size, len(thresholds))
         FP
     correct_negatives : np.ndarray
-        (seq_len, len(thresholds)) or (seq_len, batch_size, len(thresholds))
+        (seq_len, batch_size, len(thresholds))
         TN
     """
     if thresholds is None:
-        thresholds = cfg.HKO.EVALUATION.THRESHOLDS
+        thresholds = cfg.SZO.EVALUATION.THRESHOLDS
     assert 5 == prediction.ndim
     assert 5 == truth.ndim
     assert prediction.shape == truth.shape
@@ -135,10 +113,7 @@ def get_hit_miss_counts(prediction, truth, mask=None, thresholds=None, sum_batch
     btruth = (truth >= thresholds)
     bpred_n = np.logical_not(bpred)
     btruth_n = np.logical_not(btruth)
-    if sum_batch:
-        summation_axis = (1, 3, 4)
-    else:
-        summation_axis = (3, 4)
+    summation_axis = (3, 4)
     if mask is None:
         hits = np.logical_and(bpred, btruth).sum(axis=summation_axis)
         misses = np.logical_and(bpred_n, btruth).sum(axis=summation_axis)
@@ -154,6 +129,80 @@ def get_hit_miss_counts(prediction, truth, mask=None, thresholds=None, sum_batch
         correct_negatives = np.logical_and(np.logical_and(bpred_n, btruth_n), mask)\
             .sum(axis=summation_axis)
     return hits, misses, false_alarms, correct_negatives
+
+
+def get_hit_miss_counts_numba(prediction, truth, mask, thresholds=None):
+    """This function calculates the overall hits and misses for the prediction, which could be used
+    to get the skill scores and threat scores:
+
+
+    This function assumes the input, i.e, prediction and truth are 3-dim tensors, (timestep, row, col)
+    and all inputs should be between 0~1
+
+    Parameters
+    ----------
+    prediction : np.ndarray
+        Shape: (seq_len, batch_size, 1, height, width)
+    truth : np.ndarray
+        Shape: (seq_len, batch_size, 1, height, width)
+    mask : np.ndarray or None
+        Shape: (seq_len, batch_size, 1, height, width)
+        0 --> not use
+        1 --> use
+    thresholds : list or tuple
+
+    Returns
+    -------
+    hits : np.ndarray
+        (seq_len, batch_size, len(thresholds))
+        TP
+    misses : np.ndarray
+        (seq_len, batch_size, len(thresholds))
+        FN
+    false_alarms : np.ndarray
+        (seq_len, batch_size, len(thresholds))
+        FP
+    correct_negatives : np.ndarray
+        (seq_len, batch_size, len(thresholds))
+        TN
+    """
+    if thresholds is None:
+        thresholds = cfg.SZO.EVALUATION.THRESHOLDS
+    assert 5 == prediction.ndim
+    assert 5 == truth.ndim
+    assert prediction.shape == truth.shape
+    assert prediction.shape[2] == 1
+    thresholds = [rainfall_to_pixel(thresholds[i]) for i in range(len(thresholds))]
+    thresholds = sorted(thresholds)
+    ret = _get_hit_miss_counts_numba(prediction=prediction,
+                                     truth=truth,
+                                     mask=mask,
+                                     thresholds=thresholds)
+    return ret[:, :, :, 0], ret[:, :, :, 1], ret[:, :, :, 2], ret[:, :, :, 3]
+
+
+@jit(int32(float32, float32, boolean, float32))
+def _get_hit_miss_counts_numba(prediction, truth, mask, thresholds):
+    seqlen, batch_size, _, height, width = prediction.shape
+    threshold_num = len(thresholds)
+    ret = np.zeros(shape=(seqlen, batch_size, threshold_num, 4), dtype=np.int32)
+
+    for i in range(seqlen):
+        for j in range(batch_size):
+            for m in range(height):
+                for n in range(width):
+                    if mask[i][j][0][m][n]:
+                        for k in range(threshold_num):
+                            bpred = prediction[i][j][0][m][n] >= thresholds[k]
+                            btruth = truth[i][j][0][m][n] >= thresholds[k]
+                            ind = (1 - btruth) * 2 + (1 - bpred)
+                            ret[i][j][k][ind] += 1
+                            # The above code is the same as:
+                            # ret[i][j][k][0] += bpred * btruth
+                            # ret[i][j][k][1] += (1 - bpred) * btruth
+                            # ret[i][j][k][2] += bpred * (1 - btruth)
+                            # ret[i][j][k][3] += (1 - bpred) * (1- btruth)
+    return ret
 
 
 def get_correlation(prediction, truth):
@@ -175,12 +224,6 @@ def get_correlation(prediction, truth):
     ret = (prediction * truth).sum(axis=(3, 4)) / (
         np.sqrt(np.square(prediction).sum(axis=(3, 4))) * np.sqrt(np.square(truth).sum(axis=(3, 4))) + eps)
     ret = ret.sum(axis=(1, 2))
-    return ret
-
-
-def get_rainfall_mse(prediction, truth):
-    ret = np.square(pixel_to_rainfall(prediction) - pixel_to_rainfall(truth)).mean(axis=(2, 3))
-    ret = ret.sum(axis=1)
     return ret
 
 
@@ -235,77 +278,16 @@ def get_SSIM(prediction, truth):
     return ret
 
 
-def get_GDL(prediction, truth, mask, sum_batch=False):
-    """Calculate the masked gradient difference loss
-
-    Parameters
-    ----------
-    prediction : np.ndarray
-        Shape: (seq_len, batch_size, 1, height, width)
-    truth : np.ndarray
-        Shape: (seq_len, batch_size, 1, height, width)
-    mask : np.ndarray or None
-        Shape: (seq_len, batch_size, 1, height, width)
-        0 --> not use
-        1 --> use
-
-    Returns
-    -------
-    gdl : np.ndarray
-        Shape: (seq_len,) or (seq_len, batch_size)
-    """
-    prediction_diff_h = np.abs(np.diff(prediction, axis=3))
-    prediction_diff_w = np.abs(np.diff(prediction, axis=4))
-    gt_diff_h = np.abs(np.diff(truth, axis=3))
-    gt_diff_w = np.abs(np.diff(truth, axis=4))
-    mask_h = mask[:, :, :, :-1, :] * mask[:, :, :, 1:, :]
-    mask_w = mask[:, :, :, :, :-1] * mask[:, :, :, :, 1:]
-    gd_h = np.abs(prediction_diff_h - gt_diff_h)
-    gd_w = np.abs(prediction_diff_w - gt_diff_w)
-    gd_h[:] *= mask_h
-    gd_w[:] *= mask_w
-    summation_axis = (1, 2, 3, 4) if sum_batch else (2, 3, 4)
-    gdl = np.sum(gd_h, axis=summation_axis) + np.sum(gd_w, axis=summation_axis)
-    return gdl
-
-
-def get_balancing_weights(data, mask, base_balancing_weights=None, thresholds=None):
-    if thresholds is None:
-        thresholds = cfg.HKO.EVALUATION.THRESHOLDS
-    if base_balancing_weights is None:
-        base_balancing_weights = cfg.HKO.EVALUATION.BALANCING_WEIGHTS
-    thresholds = rainfall_to_pixel(np.array(thresholds, dtype=np.float32)
-                                   .reshape((1, 1, 1, 1, 1, len(thresholds))))
-    weights = np.ones_like(data) * base_balancing_weights[0]
-    threshold_mask = np.expand_dims(data, axis=5) >= thresholds
-    base_weights = np.diff(np.array(base_balancing_weights, dtype=np.float32))\
-        .reshape((1, 1, 1, 1, 1, len(base_balancing_weights) - 1))
-    weights += (threshold_mask * base_weights).sum(axis=-1)
-    weights *= mask
-    return weights
-
-
-try:
-    from nowcasting.numba_accelerated import get_GDL_numba, get_hit_miss_counts_numba,\
-        get_balancing_weights_numba
-except:
-    # get_GDL_numba = get_GDL
-    # get_hit_miss_counts_numba = get_hit_miss_counts
-    # get_balancing_weights_numba = get_balancing_weights
-    # print("Numba has not been installed correctly!")
-    raise ImportError("Numba has not been installed correctly!")
-
-class HKOEvaluation(object):
+class SZOEvaluation(object):
     def __init__(self, seq_len, use_central, no_ssim=True, threholds=None,
                  central_region=None):
         if central_region is None:
-            central_region = cfg.HKO.EVALUATION.CENTRAL_REGION
-        self._thresholds = cfg.HKO.EVALUATION.THRESHOLDS if threholds is None else threholds
+            central_region = cfg.SZO.EVALUATION.CENTRAL_REGION
+        self._thresholds = cfg.SZO.EVALUATION.THRESHOLDS if threholds is None else threholds
         self._seq_len = seq_len
         self._no_ssim = no_ssim
         self._use_central = use_central
         self._central_region = central_region
-        self._exclude_mask = get_exclude_mask()
         self.begin()
 
     def begin(self):
@@ -314,13 +296,7 @@ class HKOEvaluation(object):
         self._total_false_alarms = np.zeros((self._seq_len, len(self._thresholds)), dtype=np.int)
         self._total_correct_negatives = np.zeros((self._seq_len, len(self._thresholds)),
                                                  dtype=np.int)
-        self._mse = np.zeros((self._seq_len, ), dtype=np.float32)
-        self._mae = np.zeros((self._seq_len, ), dtype=np.float32)
-        self._balanced_mse = np.zeros((self._seq_len, ), dtype=np.float32)
-        self._balanced_mae = np.zeros((self._seq_len,), dtype=np.float32)
-        self._gdl = np.zeros((self._seq_len,), dtype=np.float32)
         self._ssim = np.zeros((self._seq_len,), dtype=np.float32)
-        self._datetime_dict = {}
         self._total_batch_num = 0
 
     def clear_all(self):
@@ -328,13 +304,10 @@ class HKOEvaluation(object):
         self._total_misses[:] = 0
         self._total_false_alarms[:] = 0
         self._total_correct_negatives[:] = 0
-        self._mse[:] = 0
-        self._mae[:] = 0
-        self._gdl[:] = 0
         self._ssim[:] = 0
         self._total_batch_num = 0
 
-    def update(self, gt, pred, mask, start_datetimes=None):
+    def update(self, gt, pred, mask):
         """
 
         Parameters
@@ -343,18 +316,12 @@ class HKOEvaluation(object):
         pred : np.ndarray
         mask : np.ndarray
             0 indicates not use and 1 indicates that the location will be taken into account
-        start_datetimes : list
-            The starting datetimes of all the testing instances
 
         Returns
         -------
 
         """
-        if start_datetimes is not None:
-            batch_size = len(start_datetimes)
-            assert gt.shape[1] == batch_size
-        else:
-            batch_size = gt.shape[1]
+        batch_size = gt.shape[1]
         assert gt.shape[0] == self._seq_len
         assert gt.shape == pred.shape
         assert gt.shape == mask.shape
@@ -371,20 +338,7 @@ class HKOEvaluation(object):
                         self._central_region[1]:self._central_region[3],
                         self._central_region[0]:self._central_region[2]]
         self._total_batch_num += batch_size
-        #TODO Save all the mse, mae, gdl, hits, misses, false_alarms and correct_negatives
-        mse = (mask * np.square(pred - gt)).sum(axis=(2, 3, 4))
-        mae = (mask * np.abs(pred - gt)).sum(axis=(2, 3, 4))
-        weights = get_balancing_weights_numba(data=gt, mask=mask,
-                                              base_balancing_weights=cfg.HKO.EVALUATION.BALANCING_WEIGHTS,
-                                              thresholds=self._thresholds)
-        balanced_mse = (weights * np.square(pred - gt)).sum(axis=(2, 3, 4))
-        balanced_mae = (weights * np.abs(pred - gt)).sum(axis=(2, 3, 4))
-        gdl = get_GDL_numba(prediction=pred, truth=gt, mask=mask)
-        self._mse += mse.sum(axis=1)
-        self._mae += mae.sum(axis=1)
-        self._balanced_mse += balanced_mse.sum(axis=1)
-        self._balanced_mae += balanced_mae.sum(axis=1)
-        self._gdl += gdl.sum(axis=1)
+        #TODO Save all the hits, misses, false_alarms and correct_negatives
         if not self._no_ssim:
             raise NotImplementedError
             # self._ssim += get_SSIM(prediction=pred, truth=gt)
@@ -432,21 +386,22 @@ class HKOEvaluation(object):
         aref = (a + b) / n * (a + c)
         gss = (a - aref) / (a + b + c - aref)
         hss = 2 * gss / (gss + 1)
-        mse = self._mse / self._total_batch_num
-        mae = self._mae / self._total_batch_num
-        balanced_mse = self._balanced_mse / self._total_batch_num
-        balanced_mae = self._balanced_mae / self._total_batch_num
-        gdl = self._gdl / self._total_batch_num
+        
+        temporal_weights = [1+i*cfg.SZO.EVALUATION.TEMPORAL_WEIGHT_SLOPE for i in range(self._seq_len)]
+        threshold_weights = cfg.SZO.EVALUATION.THRESHOLD_WEIGHTS
+        temporal_weights = np.array(temporal_weights).reshape((self._seq_len,1))
+        threshold_weights = np.array(threshold_weights).reshape((1,len(self._thresholds)))
+        weighted_hss = np.sum(hss*temporal_weights*threshold_weights) / np.sum(temporal_weights*threshold_weights)
         if not self._no_ssim:
             raise NotImplementedError
             # ssim = self._ssim / self._total_batch_num
         # return pod, far, csi, hss, gss, mse, mae, gdl
-        return pod, far, csi, hss, gss, mse, mae, balanced_mse, balanced_mae, gdl
+        return pod, far, csi, hss, gss, weighted_hss
 
     def print_stat_readable(self, prefix=""):
         logging.info("%sTotal Sequence Number: %d, Use Central: %d"
                      %(prefix, self._total_batch_num, self._use_central))
-        pod, far, csi, hss, gss, mse, mae, balanced_mse, balanced_mae, gdl = self.calculate_stat()
+        pod, far, csi, hss, gss, weighted_hss = self.calculate_stat()
         # pod, far, csi, hss, gss, mse, mae, gdl = self.calculate_stat()
         logging.info("   Hits: " + ', '.join([">%g:%g/%g" % (threshold,
                                                              self._total_hits[:, i].mean(),
@@ -462,11 +417,7 @@ class HKOEvaluation(object):
                                              for i, threshold in enumerate(self._thresholds)]))
         logging.info("   HSS: " + ', '.join([">%g:%g/%g" % (threshold, hss[:, i].mean(), hss[-1, i])
                                              for i, threshold in enumerate(self._thresholds)]))
-        logging.info("   MSE: %g/%g" % (mse.mean(), mse[-1]))
-        logging.info("   MAE: %g/%g" % (mae.mean(), mae[-1]))
-        logging.info("   Balanced MSE: %g/%g" % (balanced_mse.mean(), balanced_mse[-1]))
-        logging.info("   Balanced MAE: %g/%g" % (balanced_mae.mean(), balanced_mae[-1]))
-        logging.info("   GDL: %g/%g" % (gdl.mean(), gdl[-1]))
+        logging.info("   weighted_HSS: %g"%(weighted_hss))
         if not self._no_ssim:
             raise NotImplementedError
 
@@ -475,7 +426,7 @@ class HKOEvaluation(object):
         if not os.path.exists(dir_path):
             os.makedirs(dir_path)
         f = open(path, 'wb')
-        logging.info("Saving HKOEvaluation to %s" %path)
+        logging.info("Saving SZOEvaluation to %s" %path)
         pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
         f.close()
 
@@ -483,10 +434,10 @@ class HKOEvaluation(object):
         dir_path = os.path.dirname(path)
         if not os.path.exists(dir_path):
             os.makedirs(dir_path)
-        pod, far, csi, hss, gss, mse, mae, balanced_mse, balanced_mae, gdl = self.calculate_stat()
+        pod, far, csi, hss, gss, weighted_hss = self.calculate_stat()
         # pod, far, csi, hss, gss, mse, mae, gdl = self.calculate_stat()
         f = open(path, 'w')
-        logging.info("Saving readable txt of HKOEvaluation to %s" % path)
+        logging.info("Saving readable txt of SZOEvaluation to %s" % path)
         f.write("Total Sequence Num: %d, Out Seq Len: %d, Use Central: %d\n"
                 %(self._total_batch_num,
                   self._seq_len,
@@ -503,18 +454,69 @@ class HKOEvaluation(object):
             f.write("   CSI stat: avg %g/final %g\n" %(csi[:, i].mean(), csi[-1, i]))
             f.write("   GSS stat: avg %g/final %g\n" %(gss[:, i].mean(), gss[-1, i]))
             f.write("   HSS stat: avg %g/final %g\n" % (hss[:, i].mean(), hss[-1, i]))
-        f.write("MSE: %s\n" % str(list(mse)))
-        f.write("MAE: %s\n" % str(list(mae)))
-        f.write("Balanced MSE: %s\n" % str(list(balanced_mse)))
-        f.write("Balanced MAE: %s\n" % str(list(balanced_mae)))
-        f.write("GDL: %s\n" % str(list(gdl)))
-        f.write("MSE stat: avg %g/final %g\n" % (mse.mean(), mse[-1]))
-        f.write("MAE stat: avg %g/final %g\n" % (mae.mean(), mae[-1]))
-        f.write("Balanced MSE stat: avg %g/final %g\n" % (balanced_mse.mean(), balanced_mse[-1]))
-        f.write("Balanced MAE stat: avg %g/final %g\n" % (balanced_mae.mean(), balanced_mae[-1]))
-        f.write("GDL stat: avg %g/final %g\n" % (gdl.mean(), gdl[-1]))
+        f.write("Weigthed HSS: %g\n"%(weighted_hss))
         f.close()
 
     def save(self, prefix):
         self.save_txt_readable(prefix + ".txt")
         self.save_pkl(prefix + ".pkl")
+
+if __name__ == '__main__':
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    evaluator = SZOEvaluation(10,False)
+
+    # case1, identical, HSS supposed to be 1
+    print('case 1')
+    pred_np = np.random.uniform(size=[10,4,1,500,500])
+    gt_np = pred_np
+    mask_np = np.ones([10,4,1,500,500])
+    evaluator.update(gt_np, pred_np, mask_np)
+    evaluator.print_stat_readable()
+    evaluator.clear_all()
+
+    # case2, independent, HSS supposed to be 0
+    print('case 2')
+    pred_np = np.random.uniform(size=[10,4,1,500,500])
+    gt_np = np.random.uniform(size=[10,4,1,500,500])
+    evaluator.update(gt_np, pred_np, mask_np)
+    evaluator.print_stat_readable()
+    evaluator.clear_all()
+
+    # test mask, nan every where
+    print('test mask')
+    mask_np = np.zeros_like(mask_np)
+    evaluator.update(gt_np, pred_np, mask_np)
+    evaluator.print_stat_readable()
+    evaluator.clear_all()
+
+    # case3, avoiding, HSS supposed to be 0 on level 3, nan on level 1 and 2, 4
+    print('case 3')
+    thresholds = [rainfall_to_pixel(cfg.SZO.EVALUATION.THRESHOLDS[i]) for i in range(len(cfg.SZO.EVALUATION.THRESHOLDS))]
+    pred_np = np.random.uniform(low=thresholds[2], high=thresholds[3], size=[10,4,1,500,500])
+    gt_np = np.random.uniform(low=thresholds[1], high=thresholds[2], size=[10,4,1,500,500])
+    mask_np = np.ones_like(mask_np)
+    evaluator.update(gt_np, pred_np, mask_np)
+    evaluator.print_stat_readable()
+    evaluator.clear_all()
+
+    # test if save information over time
+    print('continual test')
+    for i in range(10):
+        pred_np = np.random.uniform(size=[10,4,1,500,500])
+        if np.random.uniform()>0.5:
+            gt_np = pred_np
+        else:
+            gt_np = np.random.uniform(size=[10,4,1,500,500])
+        evaluator.update(gt_np, pred_np, mask_np)
+        evaluator.print_stat_readable()
+    evaluator.save('temp_test/test_evaluator')
+    evaluator.clear_all()
+
+    # test saved pickle
+    with open('temp_test/test_evaluator.pkl', 'rb') as f:
+        obj = pickle.load(f)
+        print('loading complete')
+        obj.print_stat_readable()  # supposed to be same with last printed record
+
+    
