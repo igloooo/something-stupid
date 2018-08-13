@@ -11,7 +11,8 @@ from nowcasting.ops import *
 from nowcasting.prediction_base_factory import PredictionBaseFactory
 from nowcasting.operators.transformations import DFN
 from nowcasting.my_module import MyModule
-
+from collections import deque
+import random
 
 def get_encoder_forecaster_rnn_blocks(batch_size):
     encoder_rnn_blocks = []
@@ -590,7 +591,7 @@ class EncoderForecasterStates(object):
 
 def train_step(batch_size, encoder_net, forecaster_net,
                loss_net, discrim_net, loss_D_net, init_states,
-               data_nd, gt_nd, mask_nd, iter_id=None):
+               data_nd, gt_nd, mask_nd, iter_id=None, gen_buffer=None):
     """Finetune the encoder, forecaster and GAN for one step
 
     Parameters
@@ -606,6 +607,7 @@ def train_step(batch_size, encoder_net, forecaster_net,
     gt_nd : mx.nd.ndarray
     mask_nd : mx.nd.ndarray
     iter_id : int
+    gen_buffer: a fix-length deque of TCHW sequences or None
 
     Returns
     -------
@@ -632,6 +634,9 @@ def train_step(batch_size, encoder_net, forecaster_net,
                             data_batch=mx.io.DataBatch(data=init_states.get_forecaster_states()))
     forecaster_output = forecaster_net.get_outputs()
     pred_nd = forecaster_output[0]
+
+    if not gen_buffer is None:
+        gen_buffer.extend(pred_nd.split(axis=1, num_outputs=batch_size))
     
     if cfg.MODEL.GAN_G_LAMBDA > 0:
         discrim_net.forward(is_train=True,
@@ -685,7 +690,10 @@ def train_step(batch_size, encoder_net, forecaster_net,
     loss_dict['dis_output'] = 0.0
     for dis_iter in range(cfg.MODEL.TRAIN.DISCRIM_LOOP):   
         dis_loss = 0.0
-        if dis_iter > 0:
+        if not gen_buffer is None:
+            pred_nd = mx.nd.concat(*random.sample(gen_buffer, batch_size))
+            
+        if (dis_iter > 0) or (not gen_buffer is None):
             discrim_net.forward(is_train=True,
                             data_batch=mx.io.DataBatch(data=[pred_nd]))
             discrim_output = discrim_net.get_outputs()[0]

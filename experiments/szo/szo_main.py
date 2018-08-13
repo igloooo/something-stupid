@@ -20,7 +20,7 @@ from nowcasting.szo_evaluation import *
 from nowcasting.utils import parse_ctx, logging_config, latest_iter_id
 from nowcasting.szo_iterator import SZOIterator, save_png_sequence
 from nowcasting.helpers.visualization import save_hko_gif
-
+from collections import deque
 
 # Uncomment to try different seeds
 
@@ -255,12 +255,13 @@ def train(args):
         data_nd = frame_dat[0:cfg.MODEL.IN_LEN,:,:,:,:] / 255.0  # scale to [0,1]
         target_nd = frame_dat[cfg.MODEL.IN_LEN:(cfg.MODEL.IN_LEN + cfg.MODEL.OUT_LEN),:,:,:,:] / 255.0
         mask_nd = mx.nd.ones_like(target_nd)
+        gen_buffer = deque([], maxlen=cfg.MODEL.TRAIN.GEN_BUFFER_LEN)
         states, loss_dict = train_step(batch_size=cfg.MODEL.TRAIN.BATCH_SIZE,
                                encoder_net=encoder_net, forecaster_net=forecaster_net,
                                loss_net=loss_net, discrim_net=discrim_net, 
                                loss_D_net=loss_D_net, init_states=states,
                                data_nd=data_nd, gt_nd=target_nd, mask_nd=mask_nd,
-                               iter_id=iter_id)
+                               iter_id=iter_id, gen_buffer=gen_buffer)
         for k in cumulative_loss.keys():
             loss = loss_dict[k+'_output']
             cumulative_loss[k] += loss
@@ -475,7 +476,7 @@ def test(args, batches):
         target_nd = frame_dat[cfg.MODEL.IN_LEN:(cfg.MODEL.IN_LEN + cfg.MODEL.OUT_LEN),:,:,:,:] / 255.0
         pred_nd = get_prediction(data_nd, states, encoder_net, forecaster_net)
         # generate mask from target_nd
-        mask_nd = (target_nd < 1.0)
+        mask_nd = (target_nd == 0.0)
         evaluator.update(target_nd.asnumpy(), pred_nd.asnumpy(), mask_nd.asnumpy())
     evaluator.print_stat_readable()
     evaluator.save_txt_readable(path=os.path.join(base_dir, 'test_result.txt'))

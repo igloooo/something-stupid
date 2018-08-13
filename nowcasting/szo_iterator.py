@@ -15,6 +15,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 plt.switch_backend('agg')
 import time
+import re
 
 class SZOIterator:
     def __init__(self, rec_paths, in_len, out_len, batch_size, ctx, frame_skip=1, auto_add_file=True):
@@ -43,6 +44,18 @@ class SZOIterator:
         else:
             self.ctx = ctx    
 
+        self.folders=[]
+        prefix = self.rec_paths[0].split('.')[0]
+        self.load_lst(prefix+'.lst')
+        self.seq_ind = 0
+        
+    def load_lst(self, lst_path):
+        with open(lst_path, 'r') as f:
+            f.seek(0)
+            for i, line in enumerate(f):
+                if i%cfg.SZO.DATA.TOTAL_LEN == 0:
+                    self.folders.append(re.split(r'\s+', line)[-2].split('/')[-2])
+
     def sample(self):    
         """
         return tensor of 
@@ -56,6 +69,7 @@ class SZOIterator:
             self.reset()
             batch = self.image_iterator.next()
         finally:
+            self.seq_ind += self.batch_size
             frames = batch.data[0].reshape([self.batch_size, cfg.SZO.DATA.TOTAL_LEN, 1, cfg.SZO.DATA.SIZE, cfg.SZO.DATA.SIZE])
             frames = frames.transpose([1,0,2,3,4]) # to make frames in a video appear consecutively
         ret_len = self.in_len + self.out_len
@@ -87,6 +101,9 @@ class SZOIterator:
                                     batch_size = self.batch_size*cfg.SZO.DATA.TOTAL_LEN,
                                     )
         self.image_iterator.reset()
+        new_lst = next_file.split('.')[0] + '.lst'
+        self.load_lst(new_lst)
+        self.seq_ind = 0
     '''
     def resize(self, arr_nd):
         # the array should be of shape (seqlen*batch_size, channel, height, width)
