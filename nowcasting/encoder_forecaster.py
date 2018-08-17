@@ -115,7 +115,6 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
     '''
 
     def stack_rnn_encode(self, data):
-        assert self._in_seq_len % self._frame_stack == 0, 'frame_stack cannot devide seq_len'
         CONFIG = cfg.MODEL.ENCODER_FORECASTER
         pre_encoded_data = self._pre_encode_frame(frame_data=data, seqlen=self._in_seq_len, frame_stack=self._frame_stack)
         reshape_data = mx.sym.Reshape(pre_encoded_data, shape=(-1, 0, 0, 0), reverse=True)
@@ -145,7 +144,7 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
             else:
                 inputs = downsample
             rnn_out, states = self._encoder_rnn_blocks[i].unroll(
-                length=self._in_seq_len//self._frame_stack,
+                length=self._in_seq_len,
                 inputs=inputs,
                 begin_states=None,
                 ret_mid=False)
@@ -166,7 +165,6 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
         return encoder_rnn_block_states
 
     def stack_rnn_forecast(self, block_state_list, last_frame):
-        assert self._out_seq_len % self._frame_stack == 0
         CONFIG = cfg.MODEL.ENCODER_FORECASTER
         block_state_list = [self._forecaster_rnn_blocks[i].to_split(block_state_list[i])
                             for i in range(len(self._forecaster_rnn_blocks))]
@@ -176,7 +174,7 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
         curr_inputs = None
         for i in range(rnn_block_num - 1, -1, -1):
             rnn_out, rnn_state = self._forecaster_rnn_blocks[i].unroll(
-                length=self._out_seq_len//self._frame_stack, inputs=curr_inputs,
+                length=self._out_seq_len, inputs=curr_inputs,
                 begin_states=block_state_list[i][::-1],  # Reverse the order of states for the forecaster
                 ret_mid=False)
             rnn_block_outputs.append(rnn_out)
@@ -201,10 +199,10 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
                                       stride=(CONFIG.LAST_DECONV[2], CONFIG.LAST_DECONV[2]),
                                       pad=(CONFIG.LAST_DECONV[3], CONFIG.LAST_DECONV[3]))
             flow = dynamic_filter
-            dynamic_filter = mx.sym.SliceChannel(dynamic_filter, axis=0, num_outputs=self._out_seq_len//self._frame_stack)
+            dynamic_filter = mx.sym.SliceChannel(dynamic_filter, axis=0, num_outputs=self._out_seq_len)
             prev_frame = last_frame
             preds = []
-            for i in range(self._out_seq_len//self._frame_stack):
+            for i in range(self._out_seq_len):
                 pred_ele = DFN(data=prev_frame, local_kernels=dynamic_filter[i], K=11, batch_size=self._batch_size)
                 preds.append(pred_ele)
                 prev_frame = pred_ele
@@ -225,9 +223,9 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
                                    pad=(CONFIG.LAST_DECONV1[3], CONFIG.LAST_DECONV1[3]),
                                    act_type=cfg.MODEL.CNN_ACT_TYPE,
                                    name="fdeconv1")
+            # deconv1 layout: T*N C H W
             if cfg.MODEL.ENCODER_FORECASTER.USE_SKIP:
-                last_frame = mx.sym.repeat(last_frame, repeats=self._frame_stack, axis=1)
-                last_frame_repeat = mx.sym.repeat(last_frame, repeats=self._out_seq_len//self._frame_stack, axis=0)
+                last_frame_repeat = mx.sym.repeat(last_frame, repeats=self._out_seq_len, axis=0)
                 concated_layer = mx.sym.concat(deconv1, last_frame_repeat, dim=1)
             else:
                 concated_layer = deconv1
@@ -236,14 +234,14 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
                                     kernel=(3, 3), stride=(1, 1), pad=(1, 1),
                                     act_type=cfg.MODEL.CNN_ACT_TYPE, name="conv_final")
             pred = conv2d(data=conv_final,
-                          num_filter=self._frame_stack, kernel=(1, 1), name="out")
+                          num_filter=1, kernel=(1, 1), name="out")
 
         else:
             raise NotImplementedError
         #print(pred.infer_shape(fbrnn1_begin_state_h=(2, 64, 83, 83),fbrnn2_begin_state_h=(2, 192, 41, 41),fbrnn3_begin_state_h=(2, 192, 20, 20)))
         pred = mx.sym.Reshape(pred,
-                              shape=(self._out_seq_len//self._frame_stack, self._batch_size,
-                                     self._frame_stack, self._height, self._width),
+                              shape=(self._out_seq_len, self._batch_size,
+                                     1, self._height, self._width),
                               __layout__="TNCHW")
         #print(pred.infer_shape(fbrnn1_begin_state_h=(2, 64, 83, 83),fbrnn2_begin_state_h=(2, 192, 41, 41),fbrnn3_begin_state_h=(2, 192, 20, 20)))
         pred = pred.transpose([1,0,2,3,4])
@@ -667,6 +665,8 @@ def train_step(batch_size, encoder_net, forecaster_net,
     loss_dict = loss_net.get_output_dict()
     for k in loss_dict:
         loss_dict[k] = nd.mean(loss_dict[k]).asscalar()
+    if cfg.MODEL.GAN_G_LAMBDA == 0:
+        del loss_dict['gan_output']
     # Backward Forecaster
     forecaster_net.backward(out_grads=[pred_grad])
     encoder_states_grad_nd = forecaster_net.get_input_grads()
@@ -680,9 +680,12 @@ def train_step(batch_size, encoder_net, forecaster_net,
     
     loss_str = ", ".join(["%s=%g" %(k, v) for k, v in loss_dict.items()])
     if iter_id is not None:
-        logging.info("Iter:%d, %s, e_gnorm=%g, f_gnorm=%g, gan:other=%g"
-                     % (iter_id, loss_str, encoder_grad_norm, forecaster_grad_norm, grad_ratio))
-    
+        if cfg.MODEL.GAN_G_LAMBDA != 0:
+            logging.info("Iter:%d, %s, e_gnorm=%g, f_gnorm=%g, gan:other=%g"
+                    %(iter_id, loss_str, encoder_grad_norm, forecaster_grad_norm, grad_ratio))
+        else:
+            logging.info("Iter:%d, %s, e_gnorm=%g, f_gnorm=%g"
+                    %(iter_id, loss_str, encoder_grad_norm, forecaster_grad_norm))
     if cfg.MODEL.GAN_G_LAMBDA == 0:
         return init_states, loss_dict
 

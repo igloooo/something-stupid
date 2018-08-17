@@ -24,14 +24,22 @@ class PredictionBaseFactory(object):
 
     def _pre_encode_frame(self, frame_data, seqlen, frame_stack=1):
         # suppose layout (T, N, C, H, W)
-        frame_data = frame_data.transpose([1,0,2,3,4])
-        frame_data = frame_data.reshape([0, seqlen//frame_stack, frame_stack, 0, 0])
-        frame_data = frame_data.transpose([1,0,2,3,4])
+        #frame_data = frame_data.transpose([1,0,2,3,4])
+        #frame_data = frame_data.reshape([0, seqlen//frame_stack, frame_stack, 0, 0])
+        #frame_data = frame_data.transpose([1,0,2,3,4])
+        if frame_stack > 1:
+            frame_data =  mx.sym.concat(mx.sym.broadcast_to(frame_data.slice_axis(axis=0, begin=0, end=1), 
+                                                            shape=(frame_stack-1, self._batch_size,
+                                                                1, self._height, self._width)),
+                                        frame_data, 
+                                        dim=0)
+        shifted_frame_datas = [frame_data.slice_axis(axis=0, begin=i, end=(seqlen+i)) for i in range(frame_stack)]
+        frame_data = mx.sym.concat(*shifted_frame_datas,dim=2)
         ret = mx.sym.Concat(frame_data,
                              mx.sym.broadcast_to(mx.sym.expand_dims(self._spatial_grid, axis=0),
-                                                 shape=(seqlen//frame_stack, self._batch_size,
+                                                 shape=(seqlen, self._batch_size,
                                                         2, self._height, self._width)),
-                             mx.sym.ones(shape=(seqlen//frame_stack, self._batch_size, 1,
+                             mx.sym.ones(shape=(seqlen, self._batch_size, 1,
                                                 self._height, self._width)),
                              num_args=3, dim=2)
         return ret
