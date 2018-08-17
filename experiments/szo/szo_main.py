@@ -46,6 +46,7 @@ def parse_args():
     parser.add_argument('--ctx', dest='ctx', help='Running Context. E.g `--ctx gpu` or `--ctx gpu0,gpu1` or `--ctx cpu`',
                         type=str, default='gpu')
     parser.add_argument('--resume', dest='resume', action='store_true', default=False)
+    parser.add_argument('--resume_param_only', dest='resume_param_only', action='store_true', default=False)
     parser.add_argument('--lr', dest='lr', help='learning rate', default=None, type=float)
     parser.add_argument('--wd', dest='wd', help='weight decay', default=None, type=float)
     parser.add_argument('--grad_clip', dest='grad_clip', help='gradient clipping threshold',
@@ -211,12 +212,19 @@ def train(args):
         start_iter_id = latest_iter_id(base_dir)
         encoder_net.load_params(os.path.join(base_dir, 'encoder_net'+'-%04d.params'%(start_iter_id)))
         forecaster_net.load_params(os.path.join(base_dir, 'forecaster_net'+'-%04d.params'%(start_iter_id)))
-        discrim_net.load_params(os.path.join(base_dir, 'discrim_net'+'-%04d.params'%(start_iter_id)))
-        encoder_net.load_optimizer_states(os.path.join(base_dir, 'encoder_net'+'-%04d.states'%(start_iter_id)))
-        forecaster_net.load_optimizer_states(os.path.join(base_dir, 'forecaster_net'+'-%04d.states'%(start_iter_id)))
-        discrim_net.load_optimizer_states(os.path.join(base_dir, 'discrim_net'+'-%04d.states'%(start_iter_id)))
+        if not args.resume_param_only:
+            encoder_net.load_optimizer_states(os.path.join(base_dir, 'encoder_net'+'-%04d.states'%(start_iter_id)))
+            forecaster_net.load_optimizer_states(os.path.join(base_dir, 'forecaster_net'+'-%04d.states'%(start_iter_id)))
+        if cfg.MODEL.GAN_G_LAMBDA > 0:
+            discrim_net.load_params(os.path.join(base_dir, 'discrim_net'+'-%04d.params'%(start_iter_id)))
+            if not args.resume_param_only:
+                discrim_net.load_optimizer_states(os.path.join(base_dir, 'discrim_net'+'-%04d.states'%(start_iter_id)))
         for module in (encoder_net, forecaster_net, discrim_net):
             synchronize_kvstore(module)
+    else:
+        start_iter_id = -1
+
+    if args.resume and (not args.resume_param_only):
         with open(os.path.join(base_dir, 'train_loss_dicts.pkl'), 'rb') as f:
             train_loss_dicts = pickle.load(f)
         with open(os.path.join(base_dir, 'valid_loss_dicts.pkl'), 'rb') as f:
@@ -226,7 +234,6 @@ def train(args):
                 if k not in loss_types:
                     del dicts[k]
     else:
-        start_iter_id = 0
         train_loss_dicts = {}
         valid_loss_dicts = {}
         for dicts in (train_loss_dicts, valid_loss_dicts):
@@ -243,7 +250,7 @@ def train(args):
     for k in train_loss_dicts.keys():
         cumulative_loss[k] = 0.0
 
-    iter_id = start_iter_id
+    iter_id = start_iter_id + 1
     while iter_id < cfg.MODEL.TRAIN.MAX_ITER:
         if not cfg.MODEL.TRAIN.TBPTT:
             # We are not using TBPTT, we could directly sample a random minibatch
@@ -267,17 +274,25 @@ def train(args):
             cumulative_loss[k] += loss
 
         if (iter_id+1) % cfg.MODEL.VALID_ITER == 0:
-            frame_dat_v = valid_szo_iter.sample()
-            data_nd_v = frame_dat_v[0:cfg.MODEL.IN_LEN,:,:,:,:] / 255.0
-            gt_nd_v = frame_dat_v[cfg.MODEL.IN_LEN:(cfg.MODEL.IN_LEN+cfg.MODEL.OUT_LEN),:,:,:,:] / 255.0
-            mask_nd_v = mx.nd.ones_like(gt_nd_v)
-            valid_step(batch_size=cfg.MODEL.TRAIN.BATCH_SIZE,
-                    encoder_net=encoder_net, forecaster_net=forecaster_net,
-                    loss_net=loss_net, discrim_net=discrim_net,
-                    loss_D_net=loss_D_net, init_states=states,
-                    data_nd=data_nd_v, gt_nd=gt_nd_v, mask_nd=mask_nd_v,
-                    valid_loss_dicts=valid_loss_dicts, iter_id=iter_id)
+            for i in range(cfg.MODEL.VALID_LOOP):
+                frame_dat_v = valid_szo_iter.sample()
+                data_nd_v = frame_dat_v[0:cfg.MODEL.IN_LEN,:,:,:,:] / 255.0
+                gt_nd_v = frame_dat_v[cfg.MODEL.IN_LEN:(cfg.MODEL.IN_LEN+cfg.MODEL.OUT_LEN),:,:,:,:] / 255.0
+                mask_nd_v = mx.nd.ones_like(gt_nd_v)
+                states, new_valid_loss_dicts = valid_step(batch_size=cfg.MODEL.TRAIN.BATCH_SIZE,
+                                encoder_net=encoder_net, forecaster_net=forecaster_net,
+                                loss_net=loss_net, discrim_net=discrim_net,
+                                loss_D_net=loss_D_net, init_states=states,
+                                data_nd=data_nd_v, gt_nd=gt_nd_v, mask_nd=mask_nd_v,
+                                valid_loss_dicts=valid_loss_dicts, iter_id=iter_id)
+                if i == 0:
+                    for k in valid_loss_dicts.keys():
+                        valid_loss_dicts[k].append(new_valid_loss_dicts[k])
+                else:
+                    for k in valid_loss_dicts.keys():
+                        valid_loss_dicts[k][-1] += new_valid_loss_dicts[k]
             for k in valid_loss_dicts.keys():
+                valid_loss_dicts[k][-1] /= cfg.MODEL.VALID_LOOP
                 plot_loss_curve(os.path.join(base_dir, 'valid_'+k+'_loss'), valid_loss_dicts[k])
             
         if (iter_id+1) % cfg.MODEL.DRAW_EVERY == 0:
@@ -323,10 +338,11 @@ def train(args):
                 prefix=os.path.join(base_dir, "forecaster_net",),
                 epoch=iter_id,
                 save_optimizer_states=True)
-            discrim_net.save_checkpoint(
-                prefix=os.path.join(base_dir, "discrim_net",),
-                epoch=iter_id,
-                save_optimizer_states=True)
+            if cfg.MODEL.GAN_G_LAMBDA > 0:
+                discrim_net.save_checkpoint(
+                    prefix=os.path.join(base_dir, "discrim_net",),
+                    epoch=iter_id,
+                    save_optimizer_states=True)
             path1 = os.path.join(base_dir, 'train_loss_dicts.pkl')
             path2 = os.path.join(base_dir, 'valid_loss_dicts.pkl')
             with open(path1, 'wb') as f:
@@ -363,6 +379,7 @@ def valid_step(batch_size, encoder_net, forecaster_net,
                                                     label=[mx.nd.ones_like(discrim_output)]))
         discrim_loss += mx.nd.mean(discrim_net.get_outputs()[0]).asscalar()
         discrim_loss = discrim_loss / 2
+    new_valid_loss_dicts = {}
     for k in valid_loss_dicts.keys():
         if k == 'dis':
             if discrim_loss > 1.0:
@@ -377,11 +394,11 @@ def valid_step(batch_size, encoder_net, forecaster_net,
             loss = mx.nd.mean(loss_net.get_output_dict()[k+'_output']).asscalar()
         if loss < 0:
             loss = 0
-        valid_loss_dicts[k].append(loss)
-    loss_str = ", ".join(["%s=%g" %(k, v[-1]) for k, v in valid_loss_dicts.items()])
+        new_valid_loss_dicts[k] = loss
+    loss_str = ", ".join(["%s=%g" %(k, v) for k, v in new_valid_loss_dicts.items()])
     logging.info("iter {}, validation, {}".format(iter_id, loss_str))
 
-    return init_states, valid_loss_dicts
+    return init_states, new_valid_loss_dicts
 
 def predict(args, num_samples, mode='display'):
     """
@@ -441,17 +458,26 @@ def predict(args, num_samples, mode='display'):
         plt.savefig(os.path.join(base_dir, 'hist'+str(i)))
         plt.close()
         
-def test(args, batches):
-    assert cfg.MODEL.DATA_MODE == 'rescaled'
+def test(args, batches, checkpoint_id=None, on_train=False):
     evaluator = SZOEvaluation(cfg.MODEL.OUT_LEN, False)
     base_dir = get_base_dir(args)
+    logging.basicConfig(level=logging.INFO)
     save_cfg(dir_path=base_dir, source=cfg.MODEL)
-    szo_iter = SZOIterator(rec_paths=cfg.SZO_TEST_DATA_PATHS,
+    if on_train:
+        szo_iter = SZOIterator(rec_paths=cfg.SZO_TRAIN_DATA_PATHS,
                                 in_len=cfg.MODEL.IN_LEN,
                                 out_len=cfg.MODEL.OUT_LEN,
                                 batch_size=cfg.MODEL.TRAIN.BATCH_SIZE,
                                 frame_skip=cfg.MODEL.FRAME_SKIP,
                                 ctx=args.ctx)
+    else:
+        szo_iter = SZOIterator(rec_paths=cfg.SZO_TEST_DATA_PATHS,
+                                in_len=cfg.MODEL.IN_LEN,
+                                out_len=cfg.MODEL.OUT_LEN,
+                                batch_size=cfg.MODEL.TRAIN.BATCH_SIZE,
+                                frame_skip=cfg.MODEL.FRAME_SKIP,
+                                ctx=args.ctx)
+
     szo_nowcasting = SZONowcastingFactory(batch_size=cfg.MODEL.TRAIN.BATCH_SIZE // len(args.ctx),
                                           ctx_num=len(args.ctx),
                                           in_seq_len=cfg.MODEL.IN_LEN,
@@ -465,7 +491,10 @@ def test(args, batches):
     forecaster_net.summary()
     loss_net.summary()
     # try to load checkpoint
-    start_iter_id = latest_iter_id(base_dir)
+    if checkpoint_id == None:
+        start_iter_id = latest_iter_id(base_dir)
+    else:
+        start_iter_id = checkpoint_id
     encoder_net.load_params(os.path.join(base_dir, 'encoder_net'+'-%04d.params'%(start_iter_id)))
     forecaster_net.load_params(os.path.join(base_dir, 'forecaster_net'+'-%04d.params'%(start_iter_id)))
     states = EncoderForecasterStates(factory=szo_nowcasting, ctx=args.ctx[0])
@@ -479,10 +508,17 @@ def test(args, batches):
         mask_nd = (target_nd == 0.0)
         evaluator.update(target_nd.asnumpy(), pred_nd.asnumpy(), mask_nd.asnumpy())
     evaluator.print_stat_readable()
-    evaluator.save_txt_readable(path=os.path.join(base_dir, 'test_result.txt'))
+    filename = 'test_result_%03d'%(start_iter_id)
+    if on_train:
+        filename += '_on_train.txt'
+    else:
+        filename += '.txt'
+    evaluator.save_txt_readable(path=os.path.join(base_dir, filename))
+
 
 if __name__ == "__main__":
     args = parse_args()
-    #train(args)
+    train(args)
     #predict(args, 10)
-    #test(args, 20)
+    #test(args, 200)    
+
