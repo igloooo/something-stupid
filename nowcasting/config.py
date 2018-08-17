@@ -179,7 +179,7 @@ __C.MODEL.USE_SEASONALITY = False          # Whether to use seasonality
 __C.MODEL.GAN_G_LAMBDA = 0.2
 __C.MODEL.GAN_D_LAMBDA = 0.2
 
-__C.MODEL.DATA_MODE = 'rescaled'  # 'rescaled' or 'original'
+__C.MODEL.DATA_MODE = 'original'  # 'rescaled' or 'original'
 __C.MODEL.BALANCE_FACTOR = 0.15  # under 'original' mode
 # the following two don't have to be the same with SZO.EVALUATION._
 __C.MODEL.THRESHOLDS = (10, 20, 30, 50)  #(0.5, 2, 5, 10, 30)  # under 'rescaled mode'
@@ -257,6 +257,7 @@ __C.MODEL.TRAIN.GRAD_CLIP_DIS = 1.0
 __C.MODEL.TRAIN.WD = 0
 __C.MODEL.TRAIN.MAX_ITER = 180000
 __C.MODEL.VALID_ITER = 5000
+__C.MODEL.VALID_LOOP = 10
 __C.MODEL.SAVE_ITER = 15000
 __C.MODEL.TEMP_SAVE_ITER = 500
 __C.MODEL.TRAIN.LR_DECAY_ITER = 10000
