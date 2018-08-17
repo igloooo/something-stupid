@@ -50,11 +50,15 @@ class SZOIterator:
         self.seq_ind = 0
         
     def load_lst(self, lst_path):
-        with open(lst_path, 'r') as f:
-            f.seek(0)
-            for i, line in enumerate(f):
-                if i%cfg.SZO.DATA.TOTAL_LEN == 0:
-                    self.folders.append(re.split(r'\s+', line)[-2].split('/')[-2])
+        if os.path.exists(lst_path):
+            with open(lst_path, 'r') as f:
+                f.seek(0)
+                for i, line in enumerate(f):
+                    if i%cfg.SZO.DATA.TOTAL_LEN == 0:
+                        self.folders.append(re.split(r'\s+', line)[-2].split('/')[-2])
+        else:
+            logging.warning('no lst file found')
+            self.folders = None
 
     def sample(self):    
         """
