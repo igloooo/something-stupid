@@ -13,6 +13,14 @@ from nowcasting.config import cfg
 from nowcasting.helpers.msssim import _SSIMForMultiScale
 from numba import jit, float32, boolean, int32, float64
 
+def get_mse_stepwise(gt_np, pred_np):
+    """
+    gt_np: TNCHW, pixel 0-1, float32
+    pred_np: TNCHW, pixel 0-1, float32
+    return: shape (T,) vector
+    """
+    return np.sum(np.square(pred_np-gt_np), axis=(1,2,3,4))
+
 
 def pixel_to_rainfall(img, a=None, b=None):
     """Convert the pixel values to real rainfall intensity
@@ -298,6 +306,7 @@ class SZOEvaluation(object):
                                                  dtype=np.int)
         self._ssim = np.zeros((self._seq_len,), dtype=np.float32)
         self._total_batch_num = 0
+        self._total_mse = np.zeros((self._seq_len,), dtype=np.float32)
 
     def clear_all(self):
         self._total_hits[:] = 0
@@ -306,6 +315,7 @@ class SZOEvaluation(object):
         self._total_correct_negatives[:] = 0
         self._ssim[:] = 0
         self._total_batch_num = 0
+        self._total_mse[:] = 0.0
 
     def update(self, gt, pred, mask):
         """
@@ -349,6 +359,7 @@ class SZOEvaluation(object):
         self._total_misses += misses.sum(axis=1)
         self._total_false_alarms += false_alarms.sum(axis=1)
         self._total_correct_negatives += correct_negatives.sum(axis=1)
+        self._total_mse += get_mse_stepwise(gt, pred)
 
     def calculate_stat(self):
         """The following measurements will be used to measure the score of the forecaster
@@ -375,49 +386,71 @@ class SZOEvaluation(object):
         -------
 
         """
-        a = self._total_hits.astype(np.float64)
-        b = self._total_false_alarms.astype(np.float64)
-        c = self._total_misses.astype(np.float64)
-        d = self._total_correct_negatives.astype(np.float64)
-        pod = a / (a + c)
-        far = b / (a + b)
-        csi = a / (a + b + c)
-        n = a + b + c + d
-        aref = (a + b) / n * (a + c)
-        gss = (a - aref) / (a + b + c - aref)
-        hss = 2 * gss / (gss + 1)
         
-        temporal_weights = [1+i*cfg.SZO.EVALUATION.TEMPORAL_WEIGHT_SLOPE for i in range(self._seq_len)]
-        threshold_weights = cfg.SZO.EVALUATION.THRESHOLD_WEIGHTS
-        temporal_weights = np.array(temporal_weights).reshape((self._seq_len,1))
-        threshold_weights = np.array(threshold_weights).reshape((1,len(self._thresholds)))
-        weighted_hss = np.sum(hss*temporal_weights*threshold_weights) / np.sum(temporal_weights*threshold_weights)
+        temporal_weights = np.array([1+i*cfg.SZO.EVALUATION.TEMPORAL_WEIGHT_SLOPE for i in range(self._seq_len)])
+        threshold_weights = np.array(cfg.SZO.EVALUATION.THRESHOLD_WEIGHTS)
+        temporal_weights_broad = temporal_weights.reshape((self._seq_len,1))
+        threshold_weights_broad = threshold_weights.reshape((1,len(self._thresholds)))
+       
+        if cfg.MODEL.DATA_MODE == 'rescaled':
+            a = self._total_hits.astype(np.float64)
+            b = self._total_false_alarms.astype(np.float64)
+            c = self._total_misses.astype(np.float64)
+            d = self._total_correct_negatives.astype(np.float64)
+            pod = a / (a + c)
+            far = b / (a + b)
+            csi = a / (a + b + c)
+            n = a + b + c + d
+            aref = (a + b) / n * (a + c)
+            gss = (a - aref) / (a + b + c - aref)
+            hss = 2 * gss / (gss + 1)
+            weighted_hss = np.sum(hss*temporal_weights_broad*threshold_weights_broad) / np.sum(temporal_weights_broad*threshold_weights_broad)
+            mse = None
+            avg_mse = None
+        elif cfg.MODEL.DATA_MODE == 'original':
+            pod = None
+            far = None
+            csi = None
+            aref = None
+            gss = None
+            hss = None
+            weighted_hss = None
+            mse = self._total_mse / self._total_batch_num 
+            avg_mse = np.sum(mse*temporal_weights) / np.sum(temporal_weights)
+        else:
+            raise NotImplementedError
+
         if not self._no_ssim:
             raise NotImplementedError
             # ssim = self._ssim / self._total_batch_num
         # return pod, far, csi, hss, gss, mse, mae, gdl
-        return pod, far, csi, hss, gss, weighted_hss
+        return pod, far, csi, hss, gss, weighted_hss, mse, avg_mse
 
     def print_stat_readable(self, prefix=""):
         logging.info("%sTotal Sequence Number: %d, Use Central: %d"
                      %(prefix, self._total_batch_num, self._use_central))
-        pod, far, csi, hss, gss, weighted_hss = self.calculate_stat()
-        # pod, far, csi, hss, gss, mse, mae, gdl = self.calculate_stat()
-        logging.info("   Hits: " + ', '.join([">%g:%g/%g" % (threshold,
-                                                             self._total_hits[:, i].mean(),
-                                                             self._total_hits[-1, i])
-                                             for i, threshold in enumerate(self._thresholds)]))
-        logging.info("   POD: " + ', '.join([">%g:%g/%g" % (threshold, pod[:, i].mean(), pod[-1, i])
-                                  for i, threshold in enumerate(self._thresholds)]))
-        logging.info("   FAR: " + ', '.join([">%g:%g/%g" % (threshold, far[:, i].mean(), far[-1, i])
-                                  for i, threshold in enumerate(self._thresholds)]))
-        logging.info("   CSI: " + ', '.join([">%g:%g/%g" % (threshold, csi[:, i].mean(), csi[-1, i])
-                                  for i, threshold in enumerate(self._thresholds)]))
-        logging.info("   GSS: " + ', '.join([">%g:%g/%g" % (threshold, gss[:, i].mean(), gss[-1, i])
-                                             for i, threshold in enumerate(self._thresholds)]))
-        logging.info("   HSS: " + ', '.join([">%g:%g/%g" % (threshold, hss[:, i].mean(), hss[-1, i])
-                                             for i, threshold in enumerate(self._thresholds)]))
-        logging.info("   weighted_HSS: %g"%(weighted_hss))
+        pod, far, csi, hss, gss, weighted_hss, mse, avg_mse = self.calculate_stat()
+        if cfg.MODEL.DATA_MODE == 'rescaled':
+            logging.info("   Hits: " + ', '.join([">%g:%g/%g" % (threshold,
+                                                                self._total_hits[:, i].mean(),
+                                                                self._total_hits[-1, i])
+                                                for i, threshold in enumerate(self._thresholds)]))
+            logging.info("   POD: " + ', '.join([">%g:%g/%g" % (threshold, pod[:, i].mean(), pod[-1, i])
+                                    for i, threshold in enumerate(self._thresholds)]))
+            logging.info("   FAR: " + ', '.join([">%g:%g/%g" % (threshold, far[:, i].mean(), far[-1, i])
+                                    for i, threshold in enumerate(self._thresholds)]))
+            logging.info("   CSI: " + ', '.join([">%g:%g/%g" % (threshold, csi[:, i].mean(), csi[-1, i])
+                                    for i, threshold in enumerate(self._thresholds)]))
+            logging.info("   GSS: " + ', '.join([">%g:%g/%g" % (threshold, gss[:, i].mean(), gss[-1, i])
+                                                for i, threshold in enumerate(self._thresholds)]))
+            logging.info("   HSS: " + ', '.join([">%g:%g/%g" % (threshold, hss[:, i].mean(), hss[-1, i])
+                                                for i, threshold in enumerate(self._thresholds)]))
+            logging.info("   weighted_HSS: %g"%(weighted_hss))
+        elif cfg.MODEL.DATA_MODE == 'original':
+            logging.info("   MSE: " + '\n'.join(["%d:%.3f"%(i, d) for i, d in enumerate(mse)]))
+            logging.info("   average MSE: %g"%(avg_mse))
+        else:
+            raise NotImplementedError
         if not self._no_ssim:
             raise NotImplementedError
 
@@ -434,7 +467,7 @@ class SZOEvaluation(object):
         dir_path = os.path.dirname(path)
         if not os.path.exists(dir_path):
             os.makedirs(dir_path)
-        pod, far, csi, hss, gss, weighted_hss = self.calculate_stat()
+        pod, far, csi, hss, gss, weighted_hss, mse, avg_mse = self.calculate_stat()
         # pod, far, csi, hss, gss, mse, mae, gdl = self.calculate_stat()
         f = open(path, 'w')
         logging.info("Saving readable txt of SZOEvaluation to %s" % path)
@@ -442,19 +475,25 @@ class SZOEvaluation(object):
                 %(self._total_batch_num,
                   self._seq_len,
                   self._use_central))
-        for (i, threshold) in enumerate(self._thresholds):
-            f.write("Threshold = %g:\n" %threshold)
-            f.write("   POD: %s\n" %str(list(pod[:, i])))
-            f.write("   FAR: %s\n" % str(list(far[:, i])))
-            f.write("   CSI: %s\n" % str(list(csi[:, i])))
-            f.write("   GSS: %s\n" % str(list(gss[:, i])))
-            f.write("   HSS: %s\n" % str(list(hss[:, i])))
-            f.write("   POD stat: avg %g/final %g\n" %(pod[:, i].mean(), pod[-1, i]))
-            f.write("   FAR stat: avg %g/final %g\n" %(far[:, i].mean(), far[-1, i]))
-            f.write("   CSI stat: avg %g/final %g\n" %(csi[:, i].mean(), csi[-1, i]))
-            f.write("   GSS stat: avg %g/final %g\n" %(gss[:, i].mean(), gss[-1, i]))
-            f.write("   HSS stat: avg %g/final %g\n" % (hss[:, i].mean(), hss[-1, i]))
-        f.write("Weigthed HSS: %g\n"%(weighted_hss))
+        if cfg.MODEL.DATA_MODE == 'rescaled':
+            for (i, threshold) in enumerate(self._thresholds):
+                f.write("Threshold = %g:\n" %threshold)
+                f.write("   POD: %s\n" %str(list(pod[:, i])))
+                f.write("   FAR: %s\n" % str(list(far[:, i])))
+                f.write("   CSI: %s\n" % str(list(csi[:, i])))
+                f.write("   GSS: %s\n" % str(list(gss[:, i])))
+                f.write("   HSS: %s\n" % str(list(hss[:, i])))
+                f.write("   POD stat: avg %g/final %g\n" %(pod[:, i].mean(), pod[-1, i]))
+                f.write("   FAR stat: avg %g/final %g\n" %(far[:, i].mean(), far[-1, i]))
+                f.write("   CSI stat: avg %g/final %g\n" %(csi[:, i].mean(), csi[-1, i]))
+                f.write("   GSS stat: avg %g/final %g\n" %(gss[:, i].mean(), gss[-1, i]))
+                f.write("   HSS stat: avg %g/final %g\n" % (hss[:, i].mean(), hss[-1, i]))
+            f.write("Weigthed HSS: %g\n"%(weighted_hss))
+        elif cfg.MODEL.DATA_MODE == 'original':
+            f.write("   MSE: " + '\n        '.join(["%d:%.3f"%(i, d) for i, d in enumerate(mse)])+'\n')
+            f.write("average MSE: %g"%(avg_mse))
+        else:
+            raise NotImplementedError
         f.close()
 
     def save(self, prefix):
