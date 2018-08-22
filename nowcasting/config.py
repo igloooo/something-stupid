@@ -178,6 +178,7 @@ __C.MODEL.GDL_LAMBDA = 0.0
 __C.MODEL.USE_SEASONALITY = False          # Whether to use seasonality
 __C.MODEL.GAN_G_LAMBDA = 0.2
 __C.MODEL.GAN_D_LAMBDA = 0.2
+__C.MODEL.EXTEND_TO_FULL_OUTLEN = False
 
 __C.MODEL.DATA_MODE = 'original'  # 'rescaled' or 'original'
 __C.MODEL.BALANCE_FACTOR = 0.15  # under 'original' mode

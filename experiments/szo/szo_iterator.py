@@ -31,6 +31,10 @@ class SZOIterator:
         #self.height = cfg.SZO.DATA.SIZE // cfg.SZO.ITERATOR.DOWN_RATIO
         #self.width = cfg.SZO.DATA.SIZE // cfg.SZO.ITERATOR.DOWN_RATIO
         self.dataset_ind = 0
+        #self.image_iterator = mx.image.ImageIter(batch_size = cfg.SZO.DATA.TOTAL_LEN*self.batch_size,
+                                              #data_shape=(3, 501, 501),
+                                              #path_imgrec=self.rec_paths[self.dataset_ind])
+        #self.image_iterator.reset()
         self.image_iterator = mx.io.ImageRecordIter(
                                     path_imgrec=self.rec_paths[self.dataset_ind],
                                     data_shape=(1, cfg.SZO.DATA.SIZE, cfg.SZO.DATA.SIZE),
@@ -74,6 +78,7 @@ class SZOIterator:
             batch = self.image_iterator.next()
         finally:
             self.seq_ind += self.batch_size
+            #frames = batch.data[0][:,0,:cfg.SZO.DATA.SIZE,:cfg.SZO.DATA.SIZE]
             frames = batch.data[0].reshape([self.batch_size, cfg.SZO.DATA.TOTAL_LEN, 1, cfg.SZO.DATA.SIZE, cfg.SZO.DATA.SIZE])
             frames = frames.transpose([1,0,2,3,4]) # to make frames in a video appear consecutively
         ret_len = self.in_len + self.out_len

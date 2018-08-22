@@ -687,18 +687,18 @@ def train_step(batch_size, encoder_net, forecaster_net,
             logging.info("Iter:%d, %s, e_gnorm=%g, f_gnorm=%g"
                     %(iter_id, loss_str, encoder_grad_norm, forecaster_grad_norm))
     if cfg.MODEL.GAN_G_LAMBDA == 0:
-        return init_states, loss_dict
+        return init_states, loss_dict, pred_nd
 
     # train the discriminator
     loss_dict['dis_output'] = 0.0
     for dis_iter in range(cfg.MODEL.TRAIN.DISCRIM_LOOP):   
         dis_loss = 0.0
         if not gen_buffer is None:
-            pred_nd = mx.nd.concat(*random.sample(gen_buffer, batch_size))
+            pred_nd_sample = mx.nd.concat(*random.sample(gen_buffer, batch_size))
             
         if (dis_iter > 0) or (not gen_buffer is None):
             discrim_net.forward(is_train=True,
-                            data_batch=mx.io.DataBatch(data=[pred_nd]))
+                            data_batch=mx.io.DataBatch(data=[pred_nd_sample]))
             discrim_output = discrim_net.get_outputs()[0]
         label = mx.nd.zeros_like(discrim_output)
         # fake data
@@ -736,7 +736,7 @@ def train_step(batch_size, encoder_net, forecaster_net,
 
     loss_dict['dis_output'] /= cfg.MODEL.TRAIN.DISCRIM_LOOP
     
-    return init_states, loss_dict
+    return init_states, loss_dict, pred_nd
 
 '''
 def load_encoder_forecaster_params(load_dir, load_iter, encoder_net, forecaster_net):
