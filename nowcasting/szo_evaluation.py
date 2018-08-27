@@ -392,7 +392,7 @@ class SZOEvaluation(object):
         temporal_weights_broad = temporal_weights.reshape((self._seq_len,1))
         threshold_weights_broad = threshold_weights.reshape((1,len(self._thresholds)))
        
-        if cfg.MODEL.DATA_MODE == 'rescaled':
+        if (cfg.MODEL.DATA_MODE == 'rescaled') or (cfg.MODEL.ENCODER_FORECASTER.HAS_MASK):
             a = self._total_hits.astype(np.float64)
             b = self._total_false_alarms.astype(np.float64)
             c = self._total_misses.astype(np.float64)
@@ -430,7 +430,7 @@ class SZOEvaluation(object):
         logging.info("%sTotal Sequence Number: %d, Use Central: %d"
                      %(prefix, self._total_batch_num, self._use_central))
         pod, far, csi, hss, gss, weighted_hss, mse, avg_mse = self.calculate_stat()
-        if cfg.MODEL.DATA_MODE == 'rescaled':
+        if (cfg.MODEL.DATA_MODE == 'rescaled') or (cfg.MODEL.ENCODER_FORECASTER.HAS_MASK):
             logging.info("   Hits: " + ', '.join([">%g:%g/%g" % (threshold,
                                                                 self._total_hits[:, i].mean(),
                                                                 self._total_hits[-1, i])
@@ -475,7 +475,7 @@ class SZOEvaluation(object):
                 %(self._total_batch_num,
                   self._seq_len,
                   self._use_central))
-        if cfg.MODEL.DATA_MODE == 'rescaled':
+        if (cfg.MODEL.DATA_MODE == 'rescaled') or (cfg.MODEL.ENCODER_FORECASTER.HAS_MASK):
             for (i, threshold) in enumerate(self._thresholds):
                 f.write("Threshold = %g:\n" %threshold)
                 f.write("   POD: %s\n" %str(list(pod[:, i])))

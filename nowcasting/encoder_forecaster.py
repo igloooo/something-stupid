@@ -364,14 +364,13 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
                                          self._height,
                                          self._width),
                                   layout="TNCHW"))
-        if cfg.MODEL.ENCODER_FORECASTER.HAS_MASK:
-            ret.append(mx.io.DataDesc(name='mask',
-                                      shape=(self._out_seq_len,
-                                             self._ctx_num * self._batch_size,
-                                             1,
-                                             self._height,
-                                             self._width),
-                                      layout="TNCHW"))
+        ret.append(mx.io.DataDesc(name='mask',
+                                shape=(self._out_seq_len,
+                                        self._ctx_num * self._batch_size,
+                                        1,
+                                        self._height,
+                                        self._width),
+                                layout="TNCHW"))
 
         return ret
 
@@ -589,7 +588,7 @@ class EncoderForecasterStates(object):
 
 def train_step(batch_size, encoder_net, forecaster_net,
                loss_net, discrim_net, loss_D_net, init_states,
-               data_nd, gt_nd, mask_nd, iter_id=None, gen_buffer=None):
+               data_nd, gt_nd, mask_nd, iter_id=None, buffers=None):
     """Finetune the encoder, forecaster and GAN for one step
 
     Parameters
@@ -605,7 +604,7 @@ def train_step(batch_size, encoder_net, forecaster_net,
     gt_nd : mx.nd.ndarray
     mask_nd : mx.nd.ndarray
     iter_id : int
-    gen_buffer: a fix-length deque of TCHW sequences or None
+    buffers: a dictionary. buffers['fake'] and buffers['true'] are fix-length deque of TCHW sequences or None
 
     Returns
     -------
@@ -633,8 +632,9 @@ def train_step(batch_size, encoder_net, forecaster_net,
     forecaster_output = forecaster_net.get_outputs()
     pred_nd = forecaster_output[0]
 
-    if not gen_buffer is None:
-        gen_buffer.extend(pred_nd.split(axis=1, num_outputs=batch_size))
+    if cfg.MODEL.GAN_G_LAMBDA > 0:
+        buffers['fake'].extend(pred_nd.split(axis=1, num_outputs=batch_size))
+        buffers['true'].extend(gt_nd.split(axis=1, num_outputs=batch_size))
     
     if cfg.MODEL.GAN_G_LAMBDA > 0:
         discrim_net.forward(is_train=True,
@@ -644,12 +644,9 @@ def train_step(batch_size, encoder_net, forecaster_net,
         discrim_output = mx.nd.zeros((batch_size,))
 
     # Calculate the gradient of the loss functions
-    if cfg.MODEL.ENCODER_FORECASTER.HAS_MASK:
-        loss_net.forward_backward(data_batch=mx.io.DataBatch(data=[pred_nd, discrim_output],
-                                                             label=[gt_nd, mask_nd]))
-    else:
-        loss_net.forward_backward(data_batch=mx.io.DataBatch(data=[pred_nd, discrim_output],
-                                                             label=[gt_nd]))
+    loss_net.forward_backward(data_batch=mx.io.DataBatch(data=[pred_nd, discrim_output],
+                                                        label=[gt_nd, mask_nd]))
+
     pred_grad_ordinary = loss_net.get_input_grads()[0]
     
     if cfg.MODEL.GAN_G_LAMBDA > 0:
@@ -687,19 +684,18 @@ def train_step(batch_size, encoder_net, forecaster_net,
             logging.info("Iter:%d, %s, e_gnorm=%g, f_gnorm=%g"
                     %(iter_id, loss_str, encoder_grad_norm, forecaster_grad_norm))
     if cfg.MODEL.GAN_G_LAMBDA == 0:
-        return init_states, loss_dict, pred_nd
+        return init_states, loss_dict, pred_nd, buffers
 
     # train the discriminator
     loss_dict['dis_output'] = 0.0
     for dis_iter in range(cfg.MODEL.TRAIN.DISCRIM_LOOP):   
         dis_loss = 0.0
-        if not gen_buffer is None:
-            pred_nd_sample = mx.nd.concat(*random.sample(gen_buffer, batch_size))
-            
-        if (dis_iter > 0) or (not gen_buffer is None):
-            discrim_net.forward(is_train=True,
-                            data_batch=mx.io.DataBatch(data=[pred_nd_sample]))
-            discrim_output = discrim_net.get_outputs()[0]
+        pred_nd_sample = mx.nd.concat(*random.sample(buffers['fake'], batch_size))
+        gt_nd_sample = mx.nd.concat(*random.sample(buffers['true'], batch_size))
+
+        discrim_net.forward(is_train=True,
+                        data_batch=mx.io.DataBatch(data=[pred_nd_sample]))
+        discrim_output = discrim_net.get_outputs()[0]
         label = mx.nd.zeros_like(discrim_output)
         # fake data
         loss_D_net.forward_backward(data_batch=mx.io.DataBatch(data=[discrim_output],
@@ -712,7 +708,8 @@ def train_step(batch_size, encoder_net, forecaster_net,
         temp_grad = [[grad.copyto(grad.context) for grad in grads] for grads in discrim_net._exec_group.grad_arrays]
         # true data
         label[:] = 1.0
-        discrim_net.forward(data_batch=mx.io.DataBatch(data=[gt_nd]))
+
+        discrim_net.forward(data_batch=mx.io.DataBatch(data=[gt_nd_sample]))
         discrim_output = discrim_net.get_outputs()[0]
         loss_D_net.forward_backward(data_batch=mx.io.DataBatch(data=[discrim_output],
                                                                 label=[label]))
@@ -736,7 +733,7 @@ def train_step(batch_size, encoder_net, forecaster_net,
 
     loss_dict['dis_output'] /= cfg.MODEL.TRAIN.DISCRIM_LOOP
     
-    return init_states, loss_dict, pred_nd
+    return init_states, loss_dict, pred_nd, buffers
 
 '''
 def load_encoder_forecaster_params(load_dir, load_iter, encoder_net, forecaster_net):

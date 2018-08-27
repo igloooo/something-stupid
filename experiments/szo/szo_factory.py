@@ -31,6 +31,7 @@ def get_loss_weight_symbol(data, mask, seq_len):
             ratio = mx.symbol.sum(thresh_mat)/data_size
             assert (ratio < 1.0) and (ratio > 0.0)
             weights = (mx.sym.broadcast_mul(thresh_mat, (cfg.MODEL.BALANCE_FACTOR/(ratio+epsilon))) + mx.sym.broadcast_mul(1-thresh_mat, (1-cfg.MODEL.BALANCE_FACTOR)/(1-ratio+epsilon))) / 2 #* mask
+            weights = weights * mask
         else:
             raise NotImplementedError
     else:

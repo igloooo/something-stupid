@@ -59,12 +59,14 @@ class SZOIterator:
                 f.seek(0)
                 for i, line in enumerate(f):
                     if i%cfg.SZO.DATA.TOTAL_LEN == 0:
-                        self.folders.append(re.split(r'\s+', line)[-2].split('/')[-2])
+                        file_path = re.split(r'\s+', line)[-2]
+                        path_names = file_path.split('/')[:-1]
+                        self.folders.append(path_names)
         else:
             logging.warning('no lst file found')
             self.folders = None
 
-    def sample(self):    
+    def sample(self, fix_shift=False):    
         """
         return tensor of 
         shape [self.in_len+self.out_len, self.batch_size, 1, cfg.SZO.DATA.SIZE, cfg.SZO.DATA.SIZE]
@@ -82,10 +84,26 @@ class SZOIterator:
             frames = batch.data[0].reshape([self.batch_size, cfg.SZO.DATA.TOTAL_LEN, 1, cfg.SZO.DATA.SIZE, cfg.SZO.DATA.SIZE])
             frames = frames.transpose([1,0,2,3,4]) # to make frames in a video appear consecutively
         ret_len = self.in_len + self.out_len
-        shift = random.randint(0, cfg.SZO.DATA.TOTAL_LEN - ret_len*self.frame_skip)
+        if fix_shift:
+            shift = cfg.SZO.DATA.TOTAL_LEN - ret_len*self.frame_skip
+        else:
+            shift = random.randint(0, cfg.SZO.DATA.TOTAL_LEN - ret_len*self.frame_skip)
         frames = frames[shift:(shift+(ret_len-1)*self.frame_skip+1):self.frame_skip,:,:,:,:]
         assert frames.shape[0] == ret_len
+        if cfg.MODEL.DATA_MODE == 'rescaled':
+            frames = frames * (frames<255) * (255.0/80.0)
+        elif cfg.MODEL.DATA_MODE == 'original':
+            pass
+        else:
+            raise NotImplementedError
         return frames.as_in_context(self.ctx)
+
+    def get_sample_name_pair(self, fix_shift=False):
+        assert not self.folders is None
+        # the order of the two following lines cannot be reversed
+        folder_names = self.folders[self.seq_ind:self.seq_ind+self.batch_size]
+        sample = self.sample(fix_shift)
+        return sample, folder_names  
 
     def reset(self):
         # first check if file list has been updated
