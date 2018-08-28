@@ -151,22 +151,22 @@ def save_prediction(data_nd, target_nd, pred_nd, path, default_as_0=False, mode=
         save_hko_gif(gif_true, os.path.join(path, "true.gif"), multiply_by_255=False)
         save_hko_gif(gif_generated, os.path.join(path, "generated.gif"), multiply_by_255=False)
     elif mode == 'save':
-        pred_path = os.path.join(pred_path, folder_name)
-        gt_path = os.path.join(gt_path, folder_name)
-        save_pred_image_sequence(pred_np, pred_path)
-        save_gt_image_sequence(target_np, gt_path)
+        pred_prefix = os.path.join(pred_path, folder_name, folder_name)
+        gt_prefix = os.path.join(gt_path, folder_name, folder_name)
+        save_pred_image_sequence(pred_np, pred_prefix)
+        save_gt_image_sequence(target_np, gt_prefix)
     else:
         raise NotImplementedError
 
-def save_pred_image_sequence(pred_np, dir_path):
+def save_pred_image_sequence(pred_np, prefix):
     begin_index = 31
     for i in range(pred_np.shape[0]):
-        cv2.imwrite(dir_path+"_f%03d"%(i+begin_index)+".png", pred_np[i])
+        cv2.imwrite(prefix+"_f%03d"%(i+begin_index)+".png", pred_np[i])
 
-def save_gt_image_sequence(gt_np, dir_path):
+def save_gt_image_sequence(gt_np, prefix):
     begin_index = 31
     for i in range(gt_np.shape[0]):
-        cv2.imwrite(dir_path+"_%03d"%(i+begin_index)+".png", gt_np[i])
+        cv2.imwrite(prefix+"_%03d"%(i+begin_index)+".png", gt_np[i])
 
 def plot_loss_curve(path, losses):
     plt.figure()
@@ -559,7 +559,7 @@ def predict(args, num_samples, mode='display', extend='none', save_path=None):
             if not os.path.exists(pred_path):
                 os.mkdir(pred_path)
             folder_name = folder_names[0][-1]
-            save_prediction(data_nd_d[:,0,0,:,:], target_nd_d[:,0,0,:,:], pred_nd_d[:,0,0,:,:], None, default_as_0=True, mode='save', folder_name=folder_name, gt_path=gt_path, pred_path=pred_path)
+            save_prediction(data_nd_d[:,0,0,:,:], target_nd_d[:,0,0,:,:], pred_nd_d[:,0,0,:,:], None, default_as_0=False, mode='save', folder_name=folder_name, gt_path=gt_path, pred_path=pred_path)
         else:
             raise NotImplementedError
 
