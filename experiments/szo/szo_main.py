@@ -682,5 +682,5 @@ if __name__ == "__main__":
     #train(args)
     #test(args, 200)
 
-    predict(args, 4, save_path='pred_result5-30half', mode='save', extend='onetime', no_gt=True)
+    predict(args, 10000, save_path='/data1/weather1/HKO-7-master/Test_1_prediction', mode='save', extend='onetime', no_gt=True)
     

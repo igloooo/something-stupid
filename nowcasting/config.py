@@ -185,7 +185,7 @@ __C.MODEL.BALANCE_FACTOR = 0.15  # under 'original' mode
 # the following two don't have to be the same with SZO.EVALUATION._
 __C.MODEL.THRESHOLDS = (10, 20, 30, 50)  #(0.5, 2, 5, 10, 30)  # under 'rescaled mode'
 __C.MODEL.BALANCING_WEIGHTS = (1, 2, 4, 7, 11)  #(1, 1, 2, 5, 10, 30)  # The corresponding balancing weights
-__C.MODEL.DISPLAY_EPSILON = 5.0  # under 'rescaled mode'
+__C.MODEL.DISPLAY_EPSILON = 0.0  # under 'rescaled mode'
 
 __C.MODEL.TRAJRNN = edict()
 __C.MODEL.TRAJRNN.INIT_GRID = True
