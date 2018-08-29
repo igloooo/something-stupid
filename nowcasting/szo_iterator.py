@@ -18,16 +18,18 @@ import time
 import re
 
 class SZOIterator:
-    def __init__(self, rec_paths, in_len, out_len, batch_size, ctx, frame_skip=1, auto_add_file=True):
+    def __init__(self, rec_paths, in_len, out_len, batch_size, ctx, frame_skip_in=1, frame_skip_out=1, auto_add_file=True, no_gt=False):
         if isinstance(rec_paths, list):
             self.rec_paths = rec_paths
         else:
             self.rec_paths = [rec_paths]
-        assert (in_len + out_len-1)*frame_skip+1<= cfg.SZO.DATA.TOTAL_LEN, 'require a sequence that is too long'
+        assert ((in_len-1)*frame_skip_in + out_len*frame_skip_out + 1)<= cfg.SZO.DATA.TOTAL_LEN, 'require a sequence that is too long'
         self.in_len = in_len
         self.out_len = out_len
         self.batch_size = batch_size
-        self.frame_skip = frame_skip
+        self.frame_skip_in = frame_skip_in
+        self.frame_skip_out = frame_skip_out
+        self.no_gt = no_gt
         #self.height = cfg.SZO.DATA.SIZE // cfg.SZO.ITERATOR.DOWN_RATIO
         #self.width = cfg.SZO.DATA.SIZE // cfg.SZO.ITERATOR.DOWN_RATIO
         self.dataset_ind = 0
@@ -83,13 +85,24 @@ class SZOIterator:
             #frames = batch.data[0][:,0,:cfg.SZO.DATA.SIZE,:cfg.SZO.DATA.SIZE]
             frames = batch.data[0].reshape([self.batch_size, cfg.SZO.DATA.TOTAL_LEN, 1, cfg.SZO.DATA.SIZE, cfg.SZO.DATA.SIZE])
             frames = frames.transpose([1,0,2,3,4]) # to make frames in a video appear consecutively
-        ret_len = self.in_len + self.out_len
+        max_shift = cfg.SZO.DATA.TOTAL_LEN - (self.in_len-1)*self.frame_skip_in - self.out_len*self.frame_skip_out - 1
         if fix_shift:
-            shift = cfg.SZO.DATA.TOTAL_LEN - ret_len*self.frame_skip
+            shift = max_shift
         else:
-            shift = random.randint(0, cfg.SZO.DATA.TOTAL_LEN - ret_len*self.frame_skip)
-        frames = frames[shift:(shift+(ret_len-1)*self.frame_skip+1):self.frame_skip,:,:,:,:]
-        assert frames.shape[0] == ret_len
+            shift = random.randint(0, max_shift)
+        start1 = shift
+        end1 = shift+(self.in_len-1)*self.frame_skip_in+1
+        start2 = shift+(self.in_len-1)*self.frame_skip_in+self.frame_skip_out
+        end2 = shift+(self.in_len-1)*self.frame_skip_in+self.out_len*self.frame_skip_out+1
+        if not self.no_gt:
+            frames1 = frames[start1:end1:self.frame_skip_in,:,:,:,:]
+            frames2 = frames[start2:end2:self.frame_skip_out,:,:,:,:]
+            frames = mx.nd.concat(frames1, frames2, dim=0)
+            assert frames.shape[0] == self.in_len+self.out_len
+        else:
+            frames = frames[start1:end1:self.frame_skip_in,:,:,:]
+            assert frames.shape[0] == self.in_len
+
         if cfg.MODEL.DATA_MODE == 'rescaled':
             frames = frames * (frames<255) * (255.0/80.0)
         elif cfg.MODEL.DATA_MODE == 'original':
@@ -199,7 +212,8 @@ def save_gif_examples(num, train_iterator=None, save_path=None):
                                      in_len=cfg.MODEL.IN_LEN,
                                      out_len=cfg.MODEL.OUT_LEN,
                                      batch_size=1,
-                                     frame_skip=1,
+                                     frame_skip_in=cfg.MODEL.FRAME_SKIP_IN,
+                                     frame_skip_out=cfg.MODEL.FRAME_SKIP_OUT,
                                      ctx=mx.gpu()) 
     if save_path is None:
         save_path = 'data_display'
@@ -240,7 +254,8 @@ if __name__ == '__main__':
                                  in_len=5,
                                  out_len=5,
                                  batch_size=32,
-                                 frame_skip=6,  # 
+                                 frame_skip_in=6,
+                                 frame_skip_out=6,  # 
                                  ctx=mx.gpu())
     save_gif_examples(20, train_iterator=train_iterator, save_path=save_path)
     '''

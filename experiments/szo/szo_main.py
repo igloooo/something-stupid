@@ -105,68 +105,87 @@ def save_prediction(data_nd, target_nd, pred_nd, path, default_as_0=False, mode=
         if not default_as_0:
         # remain 0-80, uint8
             data_np = data_nd.asnumpy().astype(np.uint8)
-            target_np = target_nd.asnumpy().astype(np.uint8)
+            target_np = target_nd.asnumpy().astype(np.uint8) if target_nd is not None else None
             pred_np = pred_nd.asnumpy().astype(np.uint8)
         else:
         # convert 0-80 to 0-255, uint8
             scale_fac = 255.0 / 80.0
             data_np = data_nd.asnumpy()
-            target_np = target_nd.asnumpy()
+            target_np = target_nd.asnumpy() if target_nd is not None else None
             pred_np = pred_nd.asnumpy()
             data_np = data_np * (data_np<=80.0)
-            target_np = target_np * (target_np<=80.0)
+            target_np = target_np * (target_np<=80.0) if target_nd is not None else None
             pred_np = pred_np * (pred_np<=80.0)
             data_np = (data_np * scale_fac).astype(np.uint8)
-            target_np = (target_np * scale_fac).astype(np.uint8)
+            target_np = (target_np * scale_fac).astype(np.uint8) if target_nd is not None else None
             pred_np = (pred_np * scale_fac).astype(np.uint8)
     elif cfg.MODEL.DATA_MODE == 'rescaled':
         if not default_as_0:
             data_np = data_nd.asnumpy()
-            target_np = target_nd.asnumpy()
+            target_np = target_nd.asnumpy() if target_nd is not None else None
             pred_np = pred_nd.asnumpy()
             for np_arr in (data_np, target_np, pred_np):
+                if np_arr is None:
+                    continue
                 mask = np_arr < epsilon
                 np_arr *= (80/255)*(1-mask)
                 np_arr += mask*255.0
             data_np = data_np.astype(np.uint8)
-            target_np = target_np.astype(np.uint8)
+            target_np = target_np.astype(np.uint8) if target_nd is not None else None
             pred_np = pred_np.astype(np.uint8)
         else:
             data_np = data_nd.asnumpy().astype(np.uint8)
-            target_np = target_nd.asnumpy().astype(np.uint8)
+            target_np = target_nd.asnumpy().astype(np.uint8) if target_nd is not None else None
             pred_np = pred_nd.asnumpy().astype(np.uint8)
     else:
         raise NotImplementedError
 
     if mode == 'display':
-        inputs = data_np
-        ground_truth = target_np
-        predictions = pred_np
-        
-        gif_true = np.concatenate([data_np, target_np], axis=0)
-        gif_generated = np.concatenate([data_np, pred_np], axis=0)
-        
-        save_png_sequence([inputs, ground_truth, predictions], os.path.join(path, 'framewise_comp.png'))
-        
-        save_hko_gif(gif_true, os.path.join(path, "true.gif"), multiply_by_255=False)
-        save_hko_gif(gif_generated, os.path.join(path, "generated.gif"), multiply_by_255=False)
+        if target_nd is None:
+            inputs = data_np
+            ground_truth = target_np
+            predictions = pred_np
+            
+            gif_true = np.concatenate([data_np, target_np], axis=0)
+            gif_generated = np.concatenate([data_np, pred_np], axis=0)
+            
+            save_png_sequence([inputs, ground_truth, predictions], os.path.join(path, 'framewise_comp.png'))
+            
+            save_hko_gif(gif_true, os.path.join(path, "true.gif"), multiply_by_255=False)
+            save_hko_gif(gif_generated, os.path.join(path, "generated.gif"), multiply_by_255=False)
+        else:
+            inputs = data_np
+            predictions = pred_np
+            gif_generated = np.concatenate([data_np, pred_np], axis=0)
+
+            save_png_sequence([inputs, predictions], os.path.join(path, 'framewise_comp.png'))
+
+            save_hko_gif(gif_generated, os.path.join(path, "generated.gif"), multiply_by_255=False)
     elif mode == 'save':
+        pred_folder_path = os.path.join(pred_path, folder_name)
+        if not os.path.exists(pred_folder_path):
+            os.mkdir(pred_folder_path)
         pred_prefix = os.path.join(pred_path, folder_name, folder_name)
-        gt_prefix = os.path.join(gt_path, folder_name, folder_name)
         save_pred_image_sequence(pred_np, pred_prefix)
-        save_gt_image_sequence(target_np, gt_prefix)
+        if target_nd is not None:
+            gt_folder_path = os.path.join(gt_path, folder_name)
+            if not os.path.exists(gt_folder_path):
+                os.mkdir(gt_folder_path)
+            gt_prefix = os.path.join(gt_path, folder_name, folder_name)
+            save_gt_image_sequence(target_np, gt_prefix)
     else:
         raise NotImplementedError
 
 def save_pred_image_sequence(pred_np, prefix):
-    begin_index = 31
-    for i in range(pred_np.shape[0]):
-        cv2.imwrite(prefix+"_f%03d"%(i+begin_index)+".png", pred_np[i])
+    begin_index = cfg.SZO.DATA.TOTAL_LEN - (pred_np.shape[0]-1)*cfg.MODEL.FRAME_SKIP_OUT - 1
+    for i in range(pred_np.shape[0]): 
+        print('writing',prefix+"_f%03d"%(begin_index+i*cfg.MODEL.FRAME_SKIP_OUT)+".png")
+        cv2.imwrite(prefix+"_f%03d"%(begin_index+i*cfg.MODEL.FRAME_SKIP_OUT)+".png", pred_np[i])
 
 def save_gt_image_sequence(gt_np, prefix):
-    begin_index = 31
-    for i in range(gt_np.shape[0]):
-        cv2.imwrite(prefix+"_%03d"%(i+begin_index)+".png", gt_np[i])
+    begin_index = cfg.SZO.DATA.TOTAL_LEN - (gt_np.shape[0]-1)*cfg.MODEL.FRAME_SKIP_OUT - 1
+    for i in range(gt_np.shape[0]): 
+        cv2.imwrite(prefix+"_%03d"%(begin_index+i*cfg.MODEL.FRAME_SKIP_OUT)+".png", gt_np[i])
 
 def plot_loss_curve(path, losses):
     plt.figure()
@@ -181,10 +200,11 @@ def plot_loss_curve(path, losses):
 def synchronize_kvstore(module):
     def updater_assign(key, inputs, stored):
         stored[:] = inputs
-    module._kvstore._set_updater(updater_assign)
-    for k, w in zip(module._exec_group.param_names, module._exec_group.param_arrays):
-        module._kvstore.push(k, w[0].as_in_context(mx.cpu(0)))
-    module._kvstore._set_updater(mx.optimizer.get_updater(module._optimizer))
+    if module._update_on_kvstore:
+        module._kvstore._set_updater(updater_assign)
+        for k, w in zip(module._exec_group.param_names, module._exec_group.param_arrays):
+            module._kvstore.push(k, w[0].as_in_context(mx.cpu(0)))
+        module._kvstore._set_updater(mx.optimizer.get_updater(module._optimizer))
 
 def train(args):
     base_dir = get_base_dir(args)
@@ -201,13 +221,15 @@ def train(args):
                                 in_len=cfg.MODEL.IN_LEN,
                                 out_len=iter_outlen,  # iterator has to provide full output sequence as target if needed
                                 batch_size=cfg.MODEL.TRAIN.BATCH_SIZE,
-                                frame_skip=cfg.MODEL.FRAME_SKIP,
+                                frame_skip_in=cfg.MODEL.FRAME_SKIP_IN,
+                                frame_skip_out=cfg.MODEL.FRAME_SKIP_OUT, 
                                 ctx=args.ctx)
     valid_szo_iter = SZOIterator(rec_paths=cfg.SZO_TEST_DATA_PATHS,
                                 in_len=cfg.MODEL.IN_LEN,
                                 out_len=iter_outlen,
                                 batch_size=cfg.MODEL.TRAIN.BATCH_SIZE,
-                                frame_skip=cfg.MODEL.FRAME_SKIP,
+                                frame_skip_in=cfg.MODEL.FRAME_SKIP_IN,
+                                frame_skip_out=cfg.MODEL.FRAME_SKIP_OUT,
                                 ctx=args.ctx)
         
     szo_nowcasting = SZONowcastingFactory(batch_size=cfg.MODEL.TRAIN.BATCH_SIZE // len(args.ctx),
@@ -473,7 +495,7 @@ the change hasn't been complete
 2 when saving images, the naming should be considered(especially shift)
 '''
 
-def predict(args, num_samples, mode='display', extend='none', save_path=None):
+def predict(args, num_samples, save_path=None, mode='display', extend='none',  no_gt=False):
     """
     mode can be either display or save
     under display mode, num_samples gifs and comparisons are saved.
@@ -483,9 +505,11 @@ def predict(args, num_samples, mode='display', extend='none', save_path=None):
     assert len(args.ctx) == 1
     base_dir = get_base_dir(args)
     if extend == 'recursive':
+        assert (cfg.MODEL.FRAME_SKIP_IN) == 1 and (cfg.MODEL.FRAME_SKIP_OUT==1), '"extend" should be "none" when frame_skip is not 1'
         iter_outlen = 30
         model_outlen = cfg.MODEL.OUT_LEN
     elif extend == 'onetime':
+        assert (cfg.MODEL.FRAME_SKIP_IN) == 1 and (cfg.MODEL.FRAME_SKIP_OUT==1), '"extend" should be "none" when frame_skip is not 1'
         iter_outlen = 30
         model_outlen = 30
     else:
@@ -495,8 +519,10 @@ def predict(args, num_samples, mode='display', extend='none', save_path=None):
                                in_len=cfg.MODEL.IN_LEN,
                                out_len=iter_outlen,
                                batch_size=1,
-                               frame_skip=cfg.MODEL.FRAME_SKIP,
-                               ctx=args.ctx)
+                               frame_skip_in=cfg.MODEL.FRAME_SKIP_IN,
+                               frame_skip_out=cfg.MODEL.FRAME_SKIP_OUT,
+                               ctx=args.ctx,
+                               no_gt=no_gt)  # there can be no ground truth available
     szo_nowcasting = SZONowcastingFactory(batch_size=1,
                                           ctx_num=1,
                                           in_seq_len=cfg.MODEL.IN_LEN,
@@ -512,17 +538,16 @@ def predict(args, num_samples, mode='display', extend='none', save_path=None):
     loss_net.summary()
     # load parameters
     # assume parameter files are available
-    if args.resume:
-        start_iter_id = latest_iter_id(base_dir)
-        encoder_net.load_params(os.path.join(base_dir, 'encoder_net'+'-%04d.params'%(start_iter_id)))
-        forecaster_net.load_params(os.path.join(base_dir, 'forecaster_net'+'-%04d.params'%(start_iter_id)))
+    start_iter_id = latest_iter_id(base_dir)
+    encoder_net.load_params(os.path.join(base_dir, 'encoder_net'+'-%04d.params'%(start_iter_id)))
+    forecaster_net.load_params(os.path.join(base_dir, 'forecaster_net'+'-%04d.params'%(start_iter_id)))
     # initial states
     states = EncoderForecasterStates(factory=szo_nowcasting, ctx=args.ctx[0])
     # generate samples
     for i in range(num_samples):
         new_frame_dat, folder_names = szo_iterator.get_sample_name_pair(fix_shift=True)
         data_nd_d = new_frame_dat[0:cfg.MODEL.IN_LEN,:,:,:,:] / 255.0
-        target_nd_d = new_frame_dat[cfg.MODEL.IN_LEN:,:,:,:,:] / 255.0
+        target_nd_d = new_frame_dat[cfg.MODEL.IN_LEN:,:,:,:,:] / 255.0 if not no_gt else None
         states.reset_all()
         pred_nd_d1 = get_prediction(data_nd_d, states, encoder_net, forecaster_net)
         if extend == 'recursive':
@@ -534,32 +559,45 @@ def predict(args, num_samples, mode='display', extend='none', save_path=None):
             pred_nd_d = pred_nd_d1
           
         data_nd_d = (data_nd_d*255.0).clip(0, 255.0)
-        target_nd_d = (target_nd_d*255.0).clip(0, 255.0)
+        target_nd_d = (target_nd_d*255.0).clip(0, 255.0) if not no_gt else None
         pred_nd_d = (pred_nd_d*255.0).clip(0, 255.0)
 
+        if save_path is None:
+            save_path = base_dir
+        if not os.path.exists(save_path):
+            os.mkdir(save_path)
         if mode == 'display':
-            display_path1 = os.path.join(base_dir, 'prediction_'+str(i))
-            display_path2 = os.path.join(base_dir, 'prediction_'+str(i)+'_')
+            display_path1 = os.path.join(save_path, 'prediction_'+str(i))
+            display_path2 = os.path.join(save_path, 'prediction_'+str(i)+'_')
             if not os.path.exists(display_path1):
                 os.mkdir(display_path1)
             if not os.path.exists(display_path2):
                 os.mkdir(display_path2)
-            save_prediction(data_nd_d[:,0,0,:,:], target_nd_d[:,0,0,:,:], pred_nd_d[:,0,0,:,:], display_path1, default_as_0=True)
-            save_prediction(data_nd_d[:,0,0,:,:], target_nd_d[:,0,0,:,:], pred_nd_d[:,0,0,:,:], display_path2, default_as_0=False)
+
+            if not no_gt:
+                save_prediction(data_nd_d[:,0,0,:,:], target_nd_d[:,0,0,:,:], pred_nd_d[:,0,0,:,:], display_path1, default_as_0=True)
+                save_prediction(data_nd_d[:,0,0,:,:], target_nd_d[:,0,0,:,:], pred_nd_d[:,0,0,:,:], display_path2, default_as_0=False)
+            else:
+                save_prediction(data_nd_d[:,0,0,:,:], None, pred_nd_d[:,0,0,:,:], display_path1, default_as_0=True)
+                save_prediction(data_nd_d[:,0,0,:,:], None, pred_nd_d[:,0,0,:,:], display_path2, default_as_0=False)
+
             plt.hist(pred_nd_d.asnumpy().reshape([-1]), bins=100)
             plt.savefig(os.path.join(base_dir, 'hist'+str(i)))
             plt.close('all')
         elif mode == 'save':
             gt_path = os.path.join(save_path, 'groundtruth')
             pred_path = os.path.join(save_path, 'prediction')
-            if not os.path.exists(save_path):
-                os.mkdir(save_path)
-            if not os.path.exists(gt_path):
+            if (not no_gt) and (not os.path.exists(gt_path)):
                 os.mkdir(gt_path)
             if not os.path.exists(pred_path):
                 os.mkdir(pred_path)
             folder_name = folder_names[0][-1]
-            save_prediction(data_nd_d[:,0,0,:,:], target_nd_d[:,0,0,:,:], pred_nd_d[:,0,0,:,:], None, default_as_0=False, mode='save', folder_name=folder_name, gt_path=gt_path, pred_path=pred_path)
+
+            if not no_gt:
+                save_prediction(data_nd_d[:,0,0,:,:], target_nd_d[:,0,0,:,:], pred_nd_d[:,0,0,:,:], None, default_as_0=False, mode='save', folder_name=folder_name, gt_path=gt_path, pred_path=pred_path)
+            else:
+                save_prediction(data_nd_d[:,0,0,:,:], None, pred_nd_d[:,0,0,:,:], None, default_as_0=False, mode='save', folder_name=folder_name, gt_path=gt_path, pred_path=pred_path)
+
         else:
             raise NotImplementedError
 
@@ -578,14 +616,16 @@ def test(args, batches, checkpoint_id=None, on_train=False):
                                 in_len=cfg.MODEL.IN_LEN,
                                 out_len=outlen,
                                 batch_size=cfg.MODEL.TRAIN.BATCH_SIZE,
-                                frame_skip=cfg.MODEL.FRAME_SKIP,
+                                frame_skip_in=cfg.MODEL.FRAME_SKIP_IN,
+                                frame_skip_out=cfg.MODEL.FRAME_SKIP_OUT,
                                 ctx=args.ctx)
     else:
         szo_iter = SZOIterator(rec_paths=cfg.SZO_TEST_DATA_PATHS,
                                 in_len=cfg.MODEL.IN_LEN,
                                 out_len=outlen,
                                 batch_size=cfg.MODEL.TRAIN.BATCH_SIZE,
-                                frame_skip=cfg.MODEL.FRAME_SKIP,
+                                frame_skip_in=cfg.MODEL.FRAME_SKIP_IN,
+                                frame_skip_out=cfg.MODEL.FRAME_SKIP_OUT,
                                 ctx=args.ctx)
 
     szo_nowcasting = SZONowcastingFactory(batch_size=cfg.MODEL.TRAIN.BATCH_SIZE // len(args.ctx),
@@ -639,7 +679,8 @@ def test(args, batches, checkpoint_id=None, on_train=False):
 
 if __name__ == "__main__":
     args = parse_args()
-    train(args)
-    #predict(args, 4, mode='save', extend='onetime', save_path='pred_result')
-    #test(args, 200)    
+    #train(args)
+    #test(args, 200)
 
+    predict(args, 4, save_path='pred_result5-30half', mode='save', extend='onetime', no_gt=True)
+    
