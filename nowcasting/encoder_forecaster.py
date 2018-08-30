@@ -13,6 +13,7 @@ from nowcasting.operators.transformations import DFN
 from nowcasting.my_module import MyModule
 from collections import deque
 import random
+import time
 
 def get_encoder_forecaster_rnn_blocks(batch_size):
     encoder_rnn_blocks = []
@@ -349,10 +350,14 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
                                          self._height,
                                          self._width),
                                   layout="TNCHW"))
-
-        ret.append(mx.io.DataDesc(name='discrim_out',
-                                  shape=(self._ctx_num * self._batch_size,),
-                                  layout="N"))
+        if not cfg.MODEL.DISCRIMINATOR.USE_2D:
+            ret.append(mx.io.DataDesc(name='discrim_out',
+                                    shape=(self._ctx_num * self._batch_size,),
+                                    layout="N"))
+        else:
+            ret.append(mx.io.DataDesc(name='discrim_out',
+                                    shape=(self._out_seq_len, self._ctx_num*self._batch_size,),
+                                    layout="TN"))
         return ret
 
     def loss_label_desc(self):
@@ -379,16 +384,26 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
 
     def loss_D_data_desc(self):
         ret = list()
-        ret.append(mx.io.DataDesc(name='discrim_out',
-                                  shape=(self._ctx_num * self._batch_size,),
-                                  layout="N"))
+        if not cfg.MODEL.DISCRIMINATOR.USE_2D:
+            ret.append(mx.io.DataDesc(name='discrim_out',
+                                    shape=(self._ctx_num * self._batch_size,),
+                                    layout="N"))
+        else:
+            ret.append(mx.io.DataDesc(name='discrim_out',
+                                    shape=(self._out_seq_len, self._ctx_num * self._batch_size,),
+                                    layout="TN"))
         return ret
     
     def loss_D_label_desc(self):
         ret = list()
-        ret.append(mx.io.DataDesc(name='discrim_label',
-                                  shape=(self._ctx_num * self._batch_size,),
-                                  layout="N"))
+        if not cfg.MODEL.DISCRIMINATOR.USE_2D:
+            ret.append(mx.io.DataDesc(name='discrim_label',
+                                    shape=(self._ctx_num * self._batch_size,),
+                                    layout="N"))
+        else:
+            ret.append(mx.io.DataDesc(name='discrim_label',
+                                    shape=(self._out_seq_len, self._ctx_num*self._batch_size),
+                                    layout="TN"))
         return ret
     
 
@@ -685,14 +700,14 @@ def train_step(batch_size, encoder_net, forecaster_net,
                     %(iter_id, loss_str, encoder_grad_norm, forecaster_grad_norm))
     if cfg.MODEL.GAN_G_LAMBDA == 0:
         return init_states, loss_dict, pred_nd, buffers
-
     # train the discriminator
     loss_dict['dis_output'] = 0.0
+    
     for dis_iter in range(cfg.MODEL.TRAIN.DISCRIM_LOOP):   
         dis_loss = 0.0
         pred_nd_sample = mx.nd.concat(*random.sample(buffers['fake'], batch_size))
         gt_nd_sample = mx.nd.concat(*random.sample(buffers['true'], batch_size))
-
+        
         discrim_net.forward(is_train=True,
                         data_batch=mx.io.DataBatch(data=[pred_nd_sample]))
         discrim_output = discrim_net.get_outputs()[0]

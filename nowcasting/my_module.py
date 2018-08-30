@@ -87,7 +87,8 @@ class MyModule(Module):
             return u, v
         def updater_assign(key, inputs, stored):
             stored[:] = inputs
-        self._kvstore._set_updater(updater_assign)
+        if self._update_on_kvstore:
+            self._kvstore._set_updater(updater_assign)
         for i,(k, w) in enumerate(zip(self._exec_group.param_names, self._exec_group.param_arrays)):
             if k != 'discrim_fc_weight':  # only normalize fc layer!
                 continue
@@ -105,9 +106,15 @@ class MyModule(Module):
             sigma = mx.nd.linalg_gemm2(v, mx.nd.linalg_gemm2(w_reshaped, u), transpose_a=True)
             sigma = sigma.reshape([1])
             new_w = w / sigma * cfg.MODEL.DISCRIMINATOR.SPECTRAL_NORMALIZE_FACTOR
-            self._kvstore.push(k, new_w)
-            self._kvstore.pull(k, self._exec_group.param_arrays[i])
-        self._kvstore._set_updater(mx.optimizer.get_updater(self._optimizer))
+            if self._update_on_kvstore:
+                self._kvstore.push(k, new_w)
+                self._kvstore.pull(k, self._exec_group.param_arrays[i])
+            else:
+                sigma = sigma.as_in_context(self._exec_group.param_arrays[0][0].context)
+                for j in range(len(self._exec_group.param_arrays[i])):
+                    self._exec_group.param_arrays[i][j] *= cfg.MODEL.DISCRIMINATOR.SPECTRAL_NORMALIZE_FACTOR / sigma
+        if self._update_on_kvstore:
+            self._kvstore._set_updater(mx.optimizer.get_updater(self._optimizer))
         '''
         arg_params, aux_params = self.get_params()
         for k in self._exec_group.param_names:

@@ -141,7 +141,7 @@ def save_prediction(data_nd, target_nd, pred_nd, path, default_as_0=False, mode=
         raise NotImplementedError
 
     if mode == 'display':
-        if target_nd is None:
+        if target_nd is not None:
             inputs = data_np
             ground_truth = target_np
             predictions = pred_np
@@ -377,8 +377,7 @@ def train(args):
             for k in train_loss_dicts.keys():
                 avg_loss = cumulative_loss[k] / cfg.MODEL.DRAW_EVERY
                 if k=='gan':
-                    if avg_loss > 1.0:
-                        avg_loss = 1.0
+                    avg_loss = avg_loss if avg_loss < 1.0 else 1.0
                 elif k == 'dis':
                     if avg_loss > 1.0:
                         avg_loss = 1.0
@@ -449,7 +448,10 @@ def valid_step(batch_size, encoder_net, forecaster_net,
         discrim_net.forward(data_batch=mx.io.DataBatch(data=[pred_nd]))
         discrim_output = discrim_net.get_outputs()[0]
     else:
-        discrim_output = mx.nd.zeros((batch_size,))
+        if not cfg.MODEL.DISCRIMINATOR.USE_2D:
+            discrim_output = mx.nd.zeros((batch_size,))
+        else:
+            discrim_output = mx.nd.zeros((data_nd.shape[0], batch_size,))
 
     loss_net.forward(data_batch=mx.io.DataBatch(data=[pred_nd, discrim_output],
                                                 label=[gt_nd, mask_nd]))
@@ -679,8 +681,8 @@ def test(args, batches, checkpoint_id=None, on_train=False):
 
 if __name__ == "__main__":
     args = parse_args()
-    #train(args)
+    train(args)
     #test(args, 200)
 
-    predict(args, 10000, save_path='/data1/weather1/HKO-7-master/Test_1_prediction', mode='save', extend='onetime', no_gt=True)
+    #predict(args, 10000, save_path='/data1/weather1/HKO-7-master/Test_1_prediction', mode='save', extend='onetime', no_gt=True)
     

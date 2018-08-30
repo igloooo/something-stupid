@@ -8,6 +8,25 @@ from nowcasting.encoder_forecaster import EncoderForecasterBaseFactory
 from nowcasting.operators import *
 from nowcasting.ops import *
 
+def get_temporal_weight_symbol(seq_len):
+    if cfg.MODEL.TEMPORAL_WEIGHT_TYPE == "same":
+        return mx.sym.ones((seq_len,))
+    elif cfg.MODEL.TEMPORAL_WEIGHT_TYPE == "linear":
+        upper = cfg.MODEL.TEMPORAL_WEIGHT_UPPER
+        assert upper >= 1.0
+        temporal_mult = 1 + \
+                        mx.sym.arange(start=0, stop=seq_len) * (upper - 1.0) / (seq_len - 1.0)
+        temporal_mult = mx.sym.reshape(temporal_mult, shape=(seq_len, 1, 1, 1, 1))
+        return temporal_mult
+    elif cfg.MODEL.TEMPORAL_WEIGHT_TYPE == "exponential":
+        upper = cfg.MODEL.TEMPORAL_WEIGHT_UPPER
+        assert upper >= 1.0
+        base_factor = np.log(upper) / (seq_len - 1.0)
+        temporal_mult = mx.sym.exp(mx.sym.arange(start=0, stop=seq_len) * base_factor)
+        temporal_mult = mx.sym.reshape(temporal_mult, shape=(seq_len, 1, 1, 1, 1))
+        return temporal_mult
+    else:
+        raise NotImplementedError
 
 def get_loss_weight_symbol(data, mask, seq_len):
     """
@@ -36,26 +55,9 @@ def get_loss_weight_symbol(data, mask, seq_len):
             raise NotImplementedError
     else:
         weights = mask
-    if cfg.MODEL.TEMPORAL_WEIGHT_TYPE == "same":
-        return weights
-    elif cfg.MODEL.TEMPORAL_WEIGHT_TYPE == "linear":
-        upper = cfg.MODEL.TEMPORAL_WEIGHT_UPPER
-        assert upper >= 1.0
-        temporal_mult = 1 + \
-                        mx.sym.arange(start=0, stop=seq_len) * (upper - 1.0) / (seq_len - 1.0)
-        temporal_mult = mx.sym.reshape(temporal_mult, shape=(seq_len, 1, 1, 1, 1))
-        weights = mx.sym.broadcast_mul(weights, temporal_mult)
-        return weights
-    elif cfg.MODEL.TEMPORAL_WEIGHT_TYPE == "exponential":
-        upper = cfg.MODEL.TEMPORAL_WEIGHT_UPPER
-        assert upper >= 1.0
-        base_factor = np.log(upper) / (seq_len - 1.0)
-        temporal_mult = mx.sym.exp(mx.sym.arange(start=0, stop=seq_len) * base_factor)
-        temporal_mult = mx.sym.reshape(temporal_mult, shape=(seq_len, 1, 1, 1, 1))
-        weights = mx.sym.broadcast_mul(weights, temporal_mult)
-        return weights
-    else:
-        raise NotImplementedError
+    temporal_mult = get_temporal_weight_symbol(seq_len)
+    weights = mx.sym.broadcast_mul(weights, temporal_mult)
+    return weights
 
 
 class SZONowcastingFactory(EncoderForecasterBaseFactory):
@@ -82,43 +84,79 @@ class SZONowcastingFactory(EncoderForecasterBaseFactory):
         return:
         output - symbol of shape (batch_size, 1)
         """
-        # transform the layout to (batch_size, channels, seq_len, height, width)
-        video = mx.symbol.transpose(video, axes=(1, 2, 0, 3, 4))
-        num_layers = len(cfg.MODEL.DISCRIMINATOR.DISCRIM_CONV) 
-        pool_layer = mx.gluon.nn.MaxPool3D(strides=cfg.MODEL.DISCRIMINATOR.DOWNSAMPLE_VIDEO, padding=1)
-        video = pool_layer(video)
-        for i in range(num_layers):
-            if i==0:
-                inputs = video
-            else:
-                inputs = output
-            output = conv3d_bn_act(data=inputs, 
-                                height=cfg.MODEL.DISCRIMINATOR.FEATMAP_SIZE[i][1],
-                                width=cfg.MODEL.DISCRIMINATOR.FEATMAP_SIZE[i][1],
-                                num_filter=cfg.MODEL.DISCRIMINATOR.DISCRIM_CONV[i]['num_filter'],
-                                kernel=cfg.MODEL.DISCRIMINATOR.DISCRIM_CONV[i]['kernel'],
-                                stride=cfg.MODEL.DISCRIMINATOR.DISCRIM_CONV[i]['stride'],
-                                pad=cfg.MODEL.DISCRIMINATOR.DISCRIM_CONV[i]['padding'],
-                                act_type=cfg.MODEL.CNN_ACT_TYPE,
-                                name='discrim_conv'+str(i))
-            # another conv3d will serve as pooling layer
-            if i<num_layers-1:
-                output = conv3d_bn_act(data=output,
-                                    height=cfg.MODEL.DISCRIMINATOR.FEATMAP_SIZE[i+1][1],
-                                    width=cfg.MODEL.DISCRIMINATOR.FEATMAP_SIZE[i+1][1],
-                                    num_filter=cfg.MODEL.DISCRIMINATOR.DISCRIM_POOL[i]['num_filter'],
-                                    kernel=cfg.MODEL.DISCRIMINATOR.DISCRIM_POOL[i]['kernel'],
-                                    stride=cfg.MODEL.DISCRIMINATOR.DISCRIM_POOL[i]['stride'],
-                                    pad=cfg.MODEL.DISCRIMINATOR.DISCRIM_POOL[i]['padding'],
-                                    act_type=cfg.MODEL.CNN_ACT_TYPE,
-                                    name='discrim_pool'+str(i))
-        output = fc_layer(data=output.reshape([self._batch_size, -1]),
-                        num_hidden=1,
-                        name='discrim_fc',
-                        no_bias=True)
-        output = output.reshape([self._batch_size,])
-        return output 
+        if not cfg.MODEL.DISCRIMINATOR.USE_2D:
+            # transform the layout to (batch_size, channels, seq_len, height, width)
+            video = mx.symbol.transpose(video, axes=(1, 2, 0, 3, 4))
+            num_layers = len(cfg.MODEL.DISCRIMINATOR.DISCRIM_CONV) 
+            pool_layer = mx.gluon.nn.MaxPool3D(strides=cfg.MODEL.DISCRIMINATOR.DOWNSAMPLE_VIDEO, padding=1)
+            video = pool_layer(video)
 
+            for i in range(num_layers):
+                if i==0:
+                    inputs = video
+                else:
+                    inputs = output
+                output = conv3d_bn_act(data=inputs, 
+                                    height=cfg.MODEL.DISCRIMINATOR.FEATMAP_SIZE[i][1],
+                                    width=cfg.MODEL.DISCRIMINATOR.FEATMAP_SIZE[i][1],
+                                    num_filter=cfg.MODEL.DISCRIMINATOR.DISCRIM_CONV[i]['num_filter'],
+                                    kernel=cfg.MODEL.DISCRIMINATOR.DISCRIM_CONV[i]['kernel'],
+                                    stride=cfg.MODEL.DISCRIMINATOR.DISCRIM_CONV[i]['stride'],
+                                    pad=cfg.MODEL.DISCRIMINATOR.DISCRIM_CONV[i]['padding'],
+                                    act_type=cfg.MODEL.CNN_ACT_TYPE,
+                                    name='discrim_conv'+str(i))
+                # another conv3d will serve as pooling layer
+                if i<num_layers-1:
+                    output = conv3d_bn_act(data=output,
+                                        height=cfg.MODEL.DISCRIMINATOR.FEATMAP_SIZE[i+1][1],
+                                        width=cfg.MODEL.DISCRIMINATOR.FEATMAP_SIZE[i+1][1],
+                                        num_filter=cfg.MODEL.DISCRIMINATOR.DISCRIM_POOL[i]['num_filter'],
+                                        kernel=cfg.MODEL.DISCRIMINATOR.DISCRIM_POOL[i]['kernel'],
+                                        stride=cfg.MODEL.DISCRIMINATOR.DISCRIM_POOL[i]['stride'],
+                                        pad=cfg.MODEL.DISCRIMINATOR.DISCRIM_POOL[i]['padding'],
+                                        act_type=cfg.MODEL.CNN_ACT_TYPE,
+                                        name='discrim_pool'+str(i))
+            output = fc_layer(data=output.reshape([self._batch_size, -1]),
+                            num_hidden=1,
+                            name='discrim_fc',
+                            no_bias=True)
+            output = output.reshape([self._batch_size,])
+            return output
+        else:
+            # transform to shape (seqlen*batch_size, channel, height, width)
+            video = video.reshape(shape=(-1,0,0,0), reverse=True)
+            num_layers = len(cfg.MODEL.DISCRIMINATOR.DISCRIM_CONV)
+            pool_layer = mx.gluon.nn.MaxPool2D(strides=cfg.MODEL.DISCRIMINATOR.DOWNSAMPLE_VIDEO, padding=1)
+            video = pool_layer(video)
+            for i in range(num_layers):
+                if i == 0:
+                    inputs = video
+                else:
+                    inputs = output
+                output = conv2d_bn_act(data=inputs, 
+                                    num_filter=cfg.MODEL.DISCRIMINATOR.DISCRIM_CONV[i]['num_filter'],
+                                    kernel=cfg.MODEL.DISCRIMINATOR.DISCRIM_CONV[i]['kernel'],
+                                    stride=cfg.MODEL.DISCRIMINATOR.DISCRIM_CONV[i]['stride'],
+                                    pad=cfg.MODEL.DISCRIMINATOR.DISCRIM_CONV[i]['padding'],
+                                    act_type=cfg.MODEL.CNN_ACT_TYPE,
+                                    name='discrim_conv'+str(i))
+                # another conv3d will serve as pooling layer
+                if i<num_layers-1:
+                    output = conv2d_bn_act(data=output,
+                                        num_filter=cfg.MODEL.DISCRIMINATOR.DISCRIM_POOL[i]['num_filter'],
+                                        kernel=cfg.MODEL.DISCRIMINATOR.DISCRIM_POOL[i]['kernel'],
+                                        stride=cfg.MODEL.DISCRIMINATOR.DISCRIM_POOL[i]['stride'],
+                                        pad=cfg.MODEL.DISCRIMINATOR.DISCRIM_POOL[i]['padding'],
+                                        act_type=cfg.MODEL.CNN_ACT_TYPE,
+                                        name='discrim_pool'+str(i))
+            output = fc_layer(data=output.reshape([self._batch_size*self._out_seq_len, -1]),
+                            num_hidden=1,
+                            name='discrim_fc',
+                            no_bias=True)
+            output = output.reshape([self._out_seq_len, self._batch_size], __layout__="TN")
+            return output
+
+    
     def loss_sym(self,
                  pred=mx.sym.Variable('pred'),
                  mask=mx.sym.Variable('mask'),
@@ -130,18 +168,25 @@ class SZONowcastingFactory(EncoderForecasterBaseFactory):
             pred: Shape (out_seq_len, batch_size, C, H, W)
             mask: Shape (out_seq_len, batch_size, C, H, W)
             target: Shape (out_seq_len, batch_size, C, H, W)
+            discrim_output Shape (batch_size,) if 3d discrim, (out_seq_len, batch_size,) if 2d discrim
         """
         self.reset_all()
         weights = get_loss_weight_symbol(data=target, mask=mask, seq_len=self._out_seq_len)
         mse = weighted_mse(pred=pred, gt=target, weight=weights)
         mae = weighted_mae(pred=pred, gt=target, weight=weights)
         gdl = masked_gdl_loss(pred=pred, gt=target, mask=mask)
-        # gan loss is for a whole sequence, and isn't influenced by weights
-        gan = mx.sym.abs(mx.sym.broadcast_add(discrim_output, -mx.sym.ones([1])))
         avg_mse = mx.sym.mean(mse)
         avg_mae = mx.sym.mean(mae)
         avg_gdl = mx.sym.mean(gdl)
-        avg_gan = mx.sym.mean(gan)
+        # gan loss is for a whole sequence, and isn't influenced by weights
+        if not cfg.MODEL.DISCRIMINATOR.USE_2D:
+            gan = mx.sym.abs(discrim_output - mx.sym.ones_like(discrim_output))
+        else:
+            gan = mx.sym.square(discrim_output - mx.sym.ones_like(discrim_output))
+            temporal_weights = get_temporal_weight_symbol(self._out_seq_len)
+            gan = mx.sym.broadcast_mul(mx.sym.sum(mx.sym.broadcast_mul(gan, temporal_weights), axis=0), 1/mx.sym.sum(temporal_weights))  # normalize to 0-1
+        avg_gan = mx.sym.mean(gan)  # average over batches and frames
+        
         global_grad_scale = cfg.MODEL.NORMAL_LOSS_GLOBAL_SCALE
         if cfg.MODEL.L2_LAMBDA > 0:
             avg_mse = mx.sym.MakeLoss(avg_mse,
@@ -174,8 +219,11 @@ class SZONowcastingFactory(EncoderForecasterBaseFactory):
     def loss_D_sym(self, 
                 discrim_output=mx.sym.Variable('discrim_out'), 
                 label=mx.sym.Variable('discrim_label')):
-        discrim_loss = mx.sym.abs(mx.sym.broadcast_add(discrim_output, -label))
-        avg_discrim_loss = mx.sym.mean(discrim_loss)
+        if not cfg.MODEL.DISCRIMINATOR.USE_2D:
+            discrim_loss = mx.sym.abs(discrim_output -label)
+        else:
+            discrim_loss = mx.sym.square(discrim_output - label)
+        avg_discrim_loss = mx.sym.mean(discrim_loss)  # here we don't need to have temporal weights
         global_grad_scale = cfg.MODEL.NORMAL_LOSS_GLOBAL_SCALE
         if cfg.MODEL.GAN_D_LAMBDA > 0:
             avg_discrim_loss = mx.sym.MakeLoss(avg_discrim_loss,
