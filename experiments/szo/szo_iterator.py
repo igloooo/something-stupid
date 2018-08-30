@@ -18,7 +18,7 @@ import time
 import re
 
 class SZOIterator:
-    def __init__(self, rec_paths, in_len, out_len, batch_size, ctx, frame_skip_in=1, frame_skip_out=1, auto_add_file=True, no_gt=False):
+    def __init__(self, rec_paths, in_len, out_len, batch_size, ctx, frame_skip_in=1, frame_skip_out=1, auto_add_file=False, no_gt=False):
         if isinstance(rec_paths, list):
             self.rec_paths = rec_paths
         else:
@@ -30,21 +30,17 @@ class SZOIterator:
         self.frame_skip_in = frame_skip_in
         self.frame_skip_out = frame_skip_out
         self.no_gt = no_gt
-        #self.height = cfg.SZO.DATA.SIZE // cfg.SZO.ITERATOR.DOWN_RATIO
-        #self.width = cfg.SZO.DATA.SIZE // cfg.SZO.ITERATOR.DOWN_RATIO
         self.dataset_ind = 0
-        #self.image_iterator = mx.image.ImageIter(batch_size = cfg.SZO.DATA.TOTAL_LEN*self.batch_size,
-                                              #data_shape=(3, 501, 501),
-                                              #path_imgrec=self.rec_paths[self.dataset_ind])
-        #self.image_iterator.reset()
+        self.data_seq_length = cfg.SZO.DATA.TOTAL_LEN if not self.no_gt else 31
         self.image_iterator = mx.io.ImageRecordIter(
                                     path_imgrec=self.rec_paths[self.dataset_ind],
                                     data_shape=(1, cfg.SZO.DATA.SIZE, cfg.SZO.DATA.SIZE),
-                                    batch_size=cfg.SZO.DATA.TOTAL_LEN*self.batch_size,
+                                    batch_size=self.data_seq_length*self.batch_size,
                                     prefectch_buffer=4,
                                     preprocess_threads=4
                                     )
         self.auto_add_file= auto_add_file
+        assert self.auto_add_file == False
         if isinstance(ctx, list):
             self.ctx = ctx[0]
         else:
@@ -53,14 +49,14 @@ class SZOIterator:
         self.folders=[]
         prefix = self.rec_paths[0].split('.')[0]
         self.load_lst(prefix+'.lst')
-        self.seq_ind = 0
+        self.seq_ind = -self.batch_size
         
     def load_lst(self, lst_path):
         if os.path.exists(lst_path):
             with open(lst_path, 'r') as f:
                 f.seek(0)
                 for i, line in enumerate(f):
-                    if i%cfg.SZO.DATA.TOTAL_LEN == 0:
+                    if i%self.data_seq_length == 0:
                         file_path = re.split(r'\s+', line)[-2]
                         path_names = file_path.split('/')[:-1]
                         self.folders.append(path_names)
@@ -83,7 +79,7 @@ class SZOIterator:
         finally:
             self.seq_ind += self.batch_size
             #frames = batch.data[0][:,0,:cfg.SZO.DATA.SIZE,:cfg.SZO.DATA.SIZE]
-            frames = batch.data[0].reshape([self.batch_size, cfg.SZO.DATA.TOTAL_LEN, 1, cfg.SZO.DATA.SIZE, cfg.SZO.DATA.SIZE])
+            frames = batch.data[0].reshape([self.batch_size, self.data_seq_length, 1, cfg.SZO.DATA.SIZE, cfg.SZO.DATA.SIZE])
             frames = frames.transpose([1,0,2,3,4]) # to make frames in a video appear consecutively
         max_shift = cfg.SZO.DATA.TOTAL_LEN - (self.in_len-1)*self.frame_skip_in - self.out_len*self.frame_skip_out - 1
         if fix_shift:
@@ -114,13 +110,14 @@ class SZOIterator:
     def get_sample_name_pair(self, fix_shift=False):
         assert not self.folders is None
         # the order of the two following lines cannot be reversed
-        folder_names = self.folders[self.seq_ind:self.seq_ind+self.batch_size]
         sample = self.sample(fix_shift)
+        folder_names = self.folders[self.seq_ind:self.seq_ind+self.batch_size]
         return sample, folder_names  
 
     def reset(self):
         # first check if file list has been updated
         if self.auto_add_file:
+            # not used!!!
             parent_dir = os.path.join(*self.rec_paths[self.dataset_ind].split('/')[0:-1])
             parent_dir = '/'+parent_dir
             all_files = os.listdir(parent_dir)
@@ -134,23 +131,16 @@ class SZOIterator:
         else:
             self.dataset_ind = (self.dataset_ind + 1) % len(self.rec_paths)
         next_file = self.rec_paths[self.dataset_ind]
-        print('switching to {}'.format(next_file))    
+        print('switching to {}'.format(next_file))
         self.image_iterator = mx.io.ImageRecordIter(
                                     path_imgrec=next_file,
                                     data_shape=(1, cfg.SZO.DATA.SIZE, cfg.SZO.DATA.SIZE),
-                                    batch_size = self.batch_size*cfg.SZO.DATA.TOTAL_LEN,
+                                    batch_size = self.batch_size * self.data_seq_length,
                                     )
         self.image_iterator.reset()
         new_lst = next_file.split('.')[0] + '.lst'
         self.load_lst(new_lst)
-        self.seq_ind = 0
-    '''
-    def resize(self, arr_nd):
-        # the array should be of shape (seqlen*batch_size, channel, height, width)
-        arr_nd = mx.nd.contrib.BilinearResize2D(arr_nd, self.height, self.width)
-        arr_nd = arr_nd.reshape([cfg.SZO.DATA.TOTAL_LEN, 1, self.height, self.width])
-        return arr_nd
-    '''
+        self.seq_ind = -self.batch_size
 
     def get_num_frames(self):
         return self.in_len + self.out_len

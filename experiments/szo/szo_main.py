@@ -681,8 +681,8 @@ def test(args, batches, checkpoint_id=None, on_train=False):
 
 if __name__ == "__main__":
     args = parse_args()
-    train(args)
+    #train(args)
     #test(args, 200)
 
-    #predict(args, 10000, save_path='/data1/weather1/HKO-7-master/Test_1_prediction', mode='save', extend='onetime', no_gt=True)
+    predict(args, 10000, save_path='/data1/weather1/HKO-7-master/Test_1_prediction', mode='save', extend='onetime', no_gt=True)
     
