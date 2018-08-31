@@ -16,7 +16,7 @@ import cv2
 from szo_factory import SZONowcastingFactory
 from nowcasting.config import cfg, cfg_from_file, save_cfg
 from nowcasting.my_module import MyModule
-from nowcasting.encoder_forecaster import encoder_forecaster_build_networks, train_step, EncoderForecasterStates, discrim_out_info
+from nowcasting.encoder_forecaster import encoder_forecaster_build_networks, train_step, EncoderForecasterStates
 from nowcasting.szo_evaluation import *
 from nowcasting.utils import parse_ctx, logging_config, latest_iter_id
 from nowcasting.szo_iterator import SZOIterator, save_png_sequence
@@ -318,7 +318,7 @@ def train(args):
                                loss_net=loss_net, discrim_net=discrim_net, 
                                loss_D_net=loss_D_net, init_states=states,
                                data_nd=data_nd, gt_nd=target_nd, mask_nd=mask_nd,
-                               iter_id=iter_id, buffers=buffers)
+                               factory=szo_nowcasting, iter_id=iter_id, buffers=buffers)
         for k in cumulative_loss.keys():
             loss = loss_dict[k+'_output']
             cumulative_loss[k] += loss
@@ -354,7 +354,7 @@ def train(args):
                                 loss_net=loss_net, discrim_net=discrim_net,
                                 loss_D_net=loss_D_net, init_states=states,
                                 data_nd=data_nd_v, gt_nd=gt_nd_v, mask_nd=mask_nd_v,
-                                valid_loss_dicts=valid_loss_dicts, iter_id=iter_id)
+                                valid_loss_dicts=valid_loss_dicts, factory=szo_nowcasting, iter_id=iter_id)
                 if i == 0:
                     for k in valid_loss_dicts.keys():
                         valid_loss_dicts[k].append(new_valid_loss_dicts[k])
@@ -437,7 +437,7 @@ def train(args):
         
 def valid_step(batch_size, encoder_net, forecaster_net,
                loss_net, discrim_net, loss_D_net, init_states,
-               data_nd, gt_nd, mask_nd, valid_loss_dicts, iter_id=None):
+               data_nd, gt_nd, mask_nd, valid_loss_dicts, factory, iter_id=None):
     '''
     valid_loss_dicts: dict<list>
     '''
@@ -448,7 +448,7 @@ def valid_step(batch_size, encoder_net, forecaster_net,
         discrim_net.forward(data_batch=mx.io.DataBatch(data=[pred_nd]))
         discrim_output = discrim_net.get_outputs()[0]
     else:
-        discrim_output = mx.nd.zeros(discrim_out_info()['shape'])
+        discrim_output = mx.nd.zeros(factory.discrim_out_info()['shape'])
 
     loss_net.forward(data_batch=mx.io.DataBatch(data=[pred_nd, discrim_output],
                                                 label=[gt_nd, mask_nd]))

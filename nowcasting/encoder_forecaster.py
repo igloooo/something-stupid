@@ -351,8 +351,8 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
                                          self._width),
                                   layout="TNCHW"))
         ret.append(mx.io.DataDesc(name='discrim_out',
-                                shape=discrim_out_info()['shape'],
-                                layout=discrim_out_info()['layout']))
+                                shape=self.discrim_out_info()['shape'],
+                                layout=self.discrim_out_info()['layout']))
         return ret
 
     def loss_label_desc(self):
@@ -380,8 +380,8 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
     def loss_D_data_desc(self):
         ret = list()
         ret.append(mx.io.DataDesc(name='discrim_out',
-                                shape=discrim_out_info()['shape'],
-                                layout=discrim_out_info()['layout']))
+                                shape=self.discrim_out_info()['shape'],
+                                layout=self.discrim_out_info()['layout']))
         return ret
     
     def loss_D_label_desc(self):
@@ -392,27 +392,27 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
                                     layout="N"))
         else:
             ret.append(mx.io.DataDesc(name='discrim_label',
-                                    shape=discrim_out_info()['shape'],
-                                    layout=discrim_out_info()['layout']))
+                                    shape=self.discrim_out_info()['shape'],
+                                    layout=self.discrim_out_info()['layout']))
         return ret
     
-def discrim_out_info():
-    a = {}
-    if not cfg.MODEL.DISCRIMINATOR.USE_2D:
-        a['shape'] = (cfg.MODEL.TRAIN.BATCH_SIZE,)
-        a['layout'] = "N"
-    else:
-        if not cfg.MODEL.DISCRIMINATOR.PIXEL:
-            a['shape'] = (cfg.MODEL.OUT_LEN, cfg.MODEL.TRAIN.BATCH_SIZE,)
-            a['layout'] = "TN"
+    def discrim_out_info(self):
+        a = {}
+        if not cfg.MODEL.DISCRIMINATOR.USE_2D:
+            a['shape'] = (self._batch_size,)
+            a['layout'] = "N"
         else:
-            a['shape'] = (cfg.MODEL.OUT_LEN, 
-                        cfg.MODEL.TRAIN.BATCH_SIZE, 
-                        1,
-                        cfg.MODEL.DISCRIMINATOR.FEATMAP_SIZE[-1],
-                        cfg.MODEL.DISCRIMINATOR.FEATMAP_SIZE[-1])
-            a['layout'] = "TNCHW"
-    return a
+            if not cfg.MODEL.DISCRIMINATOR.PIXEL:
+                a['shape'] = (self._out_seq_len, self._batch_size,)
+                a['layout'] = "TN"
+            else:
+                a['shape'] = (self._out_seq_len, 
+                            self._batch_size, 
+                            1,
+                            cfg.MODEL.DISCRIMINATOR.FEATMAP_SIZE[-1],
+                            cfg.MODEL.DISCRIMINATOR.FEATMAP_SIZE[-1])
+                a['layout'] = "TNCHW"
+        return a
 
 def init_optimizer_using_cfg(net, for_finetune, lr=cfg.MODEL.TRAIN.LR, min_lr=cfg.MODEL.TRAIN.MIN_LR, lr_decay_iter=cfg.MODEL.TRAIN.LR_DECAY_ITER,  lr_decay_factor=cfg.MODEL.TRAIN.LR_DECAY_FACTOR, optimizer_type=None):
     if optimizer_type is None:
@@ -609,7 +609,7 @@ class EncoderForecasterStates(object):
 
 def train_step(batch_size, encoder_net, forecaster_net,
                loss_net, discrim_net, loss_D_net, init_states,
-               data_nd, gt_nd, mask_nd, iter_id=None, buffers=None):
+               data_nd, gt_nd, mask_nd, factory, iter_id=None, buffers=None):
     """Finetune the encoder, forecaster and GAN for one step
 
     Parameters
@@ -662,7 +662,7 @@ def train_step(batch_size, encoder_net, forecaster_net,
                         data_batch=mx.io.DataBatch(data=[pred_nd]))
         discrim_output = discrim_net.get_outputs()[0]
     else:
-        discrim_output = mx.nd.zeros(discrim_out_info()['shape'])
+        discrim_output = mx.nd.zeros(factory.discrim_out_info()['shape'])
 
     # Calculate the gradient of the loss functions
     loss_net.forward_backward(data_batch=mx.io.DataBatch(data=[pred_nd, discrim_output],
