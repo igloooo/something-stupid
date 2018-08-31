@@ -1,6 +1,6 @@
 CNN_ACT_TYPE: leaky
 RNN_ACT_TYPE: leaky
-FRAME_STACK: 1
+FRAME_STACK: 2
 FRAME_SKIP_IN: 1
 FRAME_SKIP_OUT: 1
 IN_LEN: 5
@@ -14,8 +14,8 @@ TEMPORAL_WEIGHT_UPPER: 3
 L1_LAMBDA: 1.0
 L2_LAMBDA: 1.0
 GDL_LAMBDA: 0.0
-GAN_G_LAMBDA: 0.0
-GAN_D_LAMBDA: 0.0
+GAN_G_LAMBDA: 20.0
+GAN_D_LAMBDA: 1.0
 DATA_MODE: rescaled
 BALANCE_FACTOR: 0.15
 THRESHOLDS: [30,]
@@ -26,8 +26,8 @@ ENCODER_FORECASTER:
   HAS_MASK: false
   USE_SKIP: false
   FEATMAP_SIZE: [83, 41, 20]
-  FIRST_CONV1: [16, 6, 3, 2]
-  FIRST_CONV2: [32, 5, 2, 1]
+  FIRST_CONV1: [32, 6, 3, 2]
+  FIRST_CONV2: [64, 5, 2, 1]
   LAST_DECONV1: [16, 6, 3, 2]
   LAST_DECONV2: [32, 5, 2, 1]
   DOWNSAMPLE:
@@ -59,27 +59,23 @@ ENCODER_FORECASTER:
     - [1, 1]
     L: [13, 13, 9]
 DISCRIMINATOR:
-  DOWNSAMPLE_VIDEO: [1,5,5]
-  USE_2D: false
-  PIXEL: false
-  FEATMAP_SIZE: 
-  - [20, 101]
-  - [10, 50]
-  - [5, 25]
-  - [2, 12]
+  USE_2D: true
+  PIXEL: true
+  DOWNSAMPLE_VIDEO: [2,2]
+  FEATMAP_SIZE: [251,125,62,31]
   DISCRIM_CONV: 
-  - {'num_filter':32, 'kernel':[3, 3, 3], 'stride':[1, 1, 1],'padding':[1, 1, 1]}
-  - {'num_filter':64, 'kernel':[3, 3, 3], 'stride':[1, 1, 1],'padding':[1, 1, 1]}
-  - {'num_filter':96, 'kernel':[3, 3, 3], 'stride':[1, 1, 1],'padding':[1, 1, 1]}
-  - {'num_filter':128, 'kernel':[3, 3, 3], 'stride':[1, 1, 1],'padding':[1, 1, 1]}
+  - {'num_filter':32, 'kernel':[3, 3], 'stride':[1, 1],'padding':[1, 1]}
+  - {'num_filter':64, 'kernel':[3, 3], 'stride':[1, 1],'padding':[1, 1]}
+  - {'num_filter':128, 'kernel':[3, 3], 'stride':[1, 1],'padding':[1, 1]}
+  - {'num_filter':1, 'kernel':[3, 3], 'stride':[1, 1],'padding':[1, 1]}
   DISCRIM_POOL: 
-  - {'num_filter':32, 'kernel':[3, 3, 3], 'stride':[2, 2, 2],'padding':[1, 0, 0]}
-  - {'num_filter':64, 'kernel':[3, 3, 3], 'stride':[2, 2, 2],'padding':[1, 1, 1]}
-  - {'num_filter':96, 'kernel':[3, 3, 3], 'stride':[2, 2, 2],'padding':[0, 0, 0]}
+  - {'num_filter':32, 'kernel':[3, 3], 'stride':[2, 2],'padding':[0, 0]}
+  - {'num_filter':64, 'kernel':[3, 3], 'stride':[2, 2],'padding':[0, 0]}
+  - {'num_filter':128, 'kernel':[3, 3], 'stride':[2, 2],'padding':[1, 1]}
   SPECTRAL_NORMALIZE_FACTOR: 1.0
 TRAIN:
   BATCH_SIZE: 4
-  DISCRIM_LOOP: 3
+  DISCRIM_LOOP: 10
   GEN_BUFFER_LEN: 4
   TBPTT: false
   OPTIMIZER: adam
@@ -93,9 +89,9 @@ TRAIN:
   LR_DECAY_FACTOR: 0.9
   LR_DECAY_ITER: 5000
   OPTIMIZER_DIS: 'rmsprop'
-  LR_DIS: 1.0e-04
+  LR_DIS: 1.0e-03
   GAMMA1: 0.9
-  MIN_LR_DIS: 1.0e-06
+  MIN_LR_DIS: 1.0e-04
   GRAD_CLIP_DIS: 1.0e-01
   LR_DECAY_FACTOR_DIS: 0.9
   LR_DECAY_ITER_DIS: 5000

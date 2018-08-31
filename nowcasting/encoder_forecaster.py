@@ -350,14 +350,9 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
                                          self._height,
                                          self._width),
                                   layout="TNCHW"))
-        if not cfg.MODEL.DISCRIMINATOR.USE_2D:
-            ret.append(mx.io.DataDesc(name='discrim_out',
-                                    shape=(self._ctx_num * self._batch_size,),
-                                    layout="N"))
-        else:
-            ret.append(mx.io.DataDesc(name='discrim_out',
-                                    shape=(self._out_seq_len, self._ctx_num*self._batch_size,),
-                                    layout="TN"))
+        ret.append(mx.io.DataDesc(name='discrim_out',
+                                shape=discrim_out_info()['shape'],
+                                layout=discrim_out_info()['layout']))
         return ret
 
     def loss_label_desc(self):
@@ -384,14 +379,9 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
 
     def loss_D_data_desc(self):
         ret = list()
-        if not cfg.MODEL.DISCRIMINATOR.USE_2D:
-            ret.append(mx.io.DataDesc(name='discrim_out',
-                                    shape=(self._ctx_num * self._batch_size,),
-                                    layout="N"))
-        else:
-            ret.append(mx.io.DataDesc(name='discrim_out',
-                                    shape=(self._out_seq_len, self._ctx_num * self._batch_size,),
-                                    layout="TN"))
+        ret.append(mx.io.DataDesc(name='discrim_out',
+                                shape=discrim_out_info()['shape'],
+                                layout=discrim_out_info()['layout']))
         return ret
     
     def loss_D_label_desc(self):
@@ -402,11 +392,27 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
                                     layout="N"))
         else:
             ret.append(mx.io.DataDesc(name='discrim_label',
-                                    shape=(self._out_seq_len, self._ctx_num*self._batch_size),
-                                    layout="TN"))
+                                    shape=discrim_out_info()['shape'],
+                                    layout=discrim_out_info()['layout']))
         return ret
     
-
+def discrim_out_info():
+    a = {}
+    if not cfg.MODEL.DISCRIMINATOR.USE_2D:
+        a['shape'] = (cfg.MODEL.TRAIN.BATCH_SIZE,)
+        a['layout'] = "N"
+    else:
+        if not cfg.MODEL.DISCRIMINATOR.PIXEL:
+            a['shape'] = (cfg.MODEL.OUT_LEN, cfg.MODEL.TRAIN.BATCH_SIZE,)
+            a['layout'] = "TN"
+        else:
+            a['shape'] = (cfg.MODEL.OUT_LEN, 
+                        cfg.MODEL.TRAIN.BATCH_SIZE, 
+                        1,
+                        cfg.MODEL.DISCRIMINATOR.FEATMAP_SIZE[-1],
+                        cfg.MODEL.DISCRIMINATOR.FEATMAP_SIZE[-1])
+            a['layout'] = "TNCHW"
+    return a
 
 def init_optimizer_using_cfg(net, for_finetune, lr=cfg.MODEL.TRAIN.LR, min_lr=cfg.MODEL.TRAIN.MIN_LR, lr_decay_iter=cfg.MODEL.TRAIN.LR_DECAY_ITER,  lr_decay_factor=cfg.MODEL.TRAIN.LR_DECAY_FACTOR, optimizer_type=None):
     if optimizer_type is None:
@@ -656,7 +662,7 @@ def train_step(batch_size, encoder_net, forecaster_net,
                         data_batch=mx.io.DataBatch(data=[pred_nd]))
         discrim_output = discrim_net.get_outputs()[0]
     else:
-        discrim_output = mx.nd.zeros((batch_size,))
+        discrim_output = mx.nd.zeros(discrim_out_info()['shape'])
 
     # Calculate the gradient of the loss functions
     loss_net.forward_backward(data_batch=mx.io.DataBatch(data=[pred_nd, discrim_output],
@@ -702,7 +708,7 @@ def train_step(batch_size, encoder_net, forecaster_net,
         return init_states, loss_dict, pred_nd, buffers
     # train the discriminator
     loss_dict['dis_output'] = 0.0
-    
+
     for dis_iter in range(cfg.MODEL.TRAIN.DISCRIM_LOOP):   
         dis_loss = 0.0
         pred_nd_sample = mx.nd.concat(*random.sample(buffers['fake'], batch_size))
@@ -741,7 +747,8 @@ def train_step(batch_size, encoder_net, forecaster_net,
         discriminator_grad_norm = discrim_net.clip_by_global_norm(max_norm=cfg.MODEL.TRAIN.GRAD_CLIP_DIS)
         #print(discrim_net._exec_group.grad_arrays)
         discrim_net.update()
-        discrim_net.spectral_normalize()
+        if not cfg.MODEL.DISCRIMINATOR.PIXEL:
+            discrim_net.spectral_normalize()
         dis_loss = dis_loss / 2
         logging.info("    subiter:%d, dis_loss:%g d_norm:%g"%(dis_iter, dis_loss, discriminator_grad_norm))
         loss_dict['dis_output'] += dis_loss

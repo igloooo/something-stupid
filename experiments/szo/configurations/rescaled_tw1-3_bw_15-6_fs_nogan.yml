@@ -1,10 +1,10 @@
 CNN_ACT_TYPE: leaky
 RNN_ACT_TYPE: leaky
-FRAME_STACK: 1
-FRAME_SKIP_IN: 1
-FRAME_SKIP_OUT: 1
-IN_LEN: 5
-OUT_LEN: 20
+FRAME_STACK: 2
+FRAME_SKIP_IN: 2
+FRAME_SKIP_OUT: 5
+IN_LEN: 15
+OUT_LEN: 6
 EXTEND_TO_FULL_OUTLEN: False
 OUT_TYPE: direct
 NORMAL_LOSS_GLOBAL_SCALE: 1.0e-05
@@ -18,16 +18,16 @@ GAN_G_LAMBDA: 0.0
 GAN_D_LAMBDA: 0.0
 DATA_MODE: rescaled
 BALANCE_FACTOR: 0.15
-THRESHOLDS: [30,]
-BALANCING_WEIGHTS: [1,2]
+THRESHOLDS: [10,30,50,70]
+BALANCING_WEIGHTS: [1, 1.5, 2, 2.5, 3]
 DISPLAY_EPSILON: -1.0
 USE_SEASONALITY: false
 ENCODER_FORECASTER:
   HAS_MASK: false
   USE_SKIP: false
   FEATMAP_SIZE: [83, 41, 20]
-  FIRST_CONV1: [16, 6, 3, 2]
-  FIRST_CONV2: [32, 5, 2, 1]
+  FIRST_CONV1: [32, 6, 3, 2]
+  FIRST_CONV2: [64, 5, 2, 1]
   LAST_DECONV1: [16, 6, 3, 2]
   LAST_DECONV2: [32, 5, 2, 1]
   DOWNSAMPLE:
@@ -63,19 +63,19 @@ DISCRIMINATOR:
   USE_2D: false
   PIXEL: false
   FEATMAP_SIZE: 
-  - [20, 101]
-  - [10, 50]
-  - [5, 25]
-  - [2, 12]
+  - [6, 101]
+  - [6, 50]
+  - [6, 25]
+  - [6, 12]
   DISCRIM_CONV: 
   - {'num_filter':32, 'kernel':[3, 3, 3], 'stride':[1, 1, 1],'padding':[1, 1, 1]}
   - {'num_filter':64, 'kernel':[3, 3, 3], 'stride':[1, 1, 1],'padding':[1, 1, 1]}
   - {'num_filter':96, 'kernel':[3, 3, 3], 'stride':[1, 1, 1],'padding':[1, 1, 1]}
   - {'num_filter':128, 'kernel':[3, 3, 3], 'stride':[1, 1, 1],'padding':[1, 1, 1]}
   DISCRIM_POOL: 
-  - {'num_filter':32, 'kernel':[3, 3, 3], 'stride':[2, 2, 2],'padding':[1, 0, 0]}
-  - {'num_filter':64, 'kernel':[3, 3, 3], 'stride':[2, 2, 2],'padding':[1, 1, 1]}
-  - {'num_filter':96, 'kernel':[3, 3, 3], 'stride':[2, 2, 2],'padding':[0, 0, 0]}
+  - {'num_filter':32, 'kernel':[3, 3, 3], 'stride':[1, 2, 2],'padding':[1, 0, 0]}
+  - {'num_filter':64, 'kernel':[3, 3, 3], 'stride':[1, 2, 2],'padding':[1, 1, 1]}
+  - {'num_filter':96, 'kernel':[3, 3, 3], 'stride':[1, 2, 2],'padding':[1, 0, 0]}
   SPECTRAL_NORMALIZE_FACTOR: 1.0
 TRAIN:
   BATCH_SIZE: 4

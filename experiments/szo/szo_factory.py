@@ -38,7 +38,7 @@ def get_loss_weight_symbol(data, mask, seq_len):
         if cfg.MODEL.DATA_MODE == 'rescaled':
             balancing_weights = cfg.MODEL.BALANCING_WEIGHTS
             weights = mx.sym.ones_like(data) * balancing_weights[0]
-            thresholds = [ele / 255.0 for ele in cfg.MODEL.THRESHOLDS]
+            thresholds = [ele / 80.0 for ele in cfg.MODEL.THRESHOLDS]
             for i, threshold in enumerate(thresholds):
                 weights = weights + (balancing_weights[i + 1] - balancing_weights[i]) * (data >= threshold)
             weights = weights * mask
@@ -149,14 +149,20 @@ class SZONowcastingFactory(EncoderForecasterBaseFactory):
                                         pad=cfg.MODEL.DISCRIMINATOR.DISCRIM_POOL[i]['padding'],
                                         act_type=cfg.MODEL.CNN_ACT_TYPE,
                                         name='discrim_pool'+str(i))
-            output = fc_layer(data=output.reshape([self._batch_size*self._out_seq_len, -1]),
-                            num_hidden=1,
-                            name='discrim_fc',
-                            no_bias=True)
-            output = output.reshape([self._out_seq_len, self._batch_size], __layout__="TN")
+            if not cfg.MODEL.DISCRIMINATOR.PIXEL:
+                output = fc_layer(data=output.reshape([self._batch_size*self._out_seq_len, -1]),
+                                num_hidden=1,
+                                name='discrim_fc',
+                                no_bias=True)
+                output = output.reshape([self._out_seq_len, self._batch_size], __layout__="TN")
+            else:
+                #output = conv2d_act(data=output,
+                #                num_filter=1,
+                #                name='discrim_1x1',
+                #                act_type='relu')
+                output = output.reshape([self._out_seq_len, self._batch_size,0,0,0], reverse=True, __layout__="TNCHW")
             return output
 
-    
     def loss_sym(self,
                  pred=mx.sym.Variable('pred'),
                  mask=mx.sym.Variable('mask'),
@@ -183,6 +189,8 @@ class SZONowcastingFactory(EncoderForecasterBaseFactory):
             gan = mx.sym.abs(discrim_output - mx.sym.ones_like(discrim_output))
         else:
             gan = mx.sym.square(discrim_output - mx.sym.ones_like(discrim_output))
+            if cfg.MODEL.DISCRIMINATOR.PIXEL:
+                gan = mx.sym.mean(gan, axis=(2,3,4))
             temporal_weights = get_temporal_weight_symbol(self._out_seq_len)
             gan = mx.sym.broadcast_mul(mx.sym.sum(mx.sym.broadcast_mul(gan, temporal_weights), axis=0), 1/mx.sym.sum(temporal_weights))  # normalize to 0-1
         avg_gan = mx.sym.mean(gan)  # average over batches and frames

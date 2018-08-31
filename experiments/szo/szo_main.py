@@ -16,7 +16,7 @@ import cv2
 from szo_factory import SZONowcastingFactory
 from nowcasting.config import cfg, cfg_from_file, save_cfg
 from nowcasting.my_module import MyModule
-from nowcasting.encoder_forecaster import encoder_forecaster_build_networks, train_step, EncoderForecasterStates
+from nowcasting.encoder_forecaster import encoder_forecaster_build_networks, train_step, EncoderForecasterStates, discrim_out_info
 from nowcasting.szo_evaluation import *
 from nowcasting.utils import parse_ctx, logging_config, latest_iter_id
 from nowcasting.szo_iterator import SZOIterator, save_png_sequence
@@ -448,10 +448,7 @@ def valid_step(batch_size, encoder_net, forecaster_net,
         discrim_net.forward(data_batch=mx.io.DataBatch(data=[pred_nd]))
         discrim_output = discrim_net.get_outputs()[0]
     else:
-        if not cfg.MODEL.DISCRIMINATOR.USE_2D:
-            discrim_output = mx.nd.zeros((batch_size,))
-        else:
-            discrim_output = mx.nd.zeros((data_nd.shape[0], batch_size,))
+        discrim_output = mx.nd.zeros(discrim_out_info()['shape'])
 
     loss_net.forward(data_batch=mx.io.DataBatch(data=[pred_nd, discrim_output],
                                                 label=[gt_nd, mask_nd]))
@@ -681,8 +678,8 @@ def test(args, batches, checkpoint_id=None, on_train=False):
 
 if __name__ == "__main__":
     args = parse_args()
-    #train(args)
+    train(args)
     #test(args, 200)
 
-    predict(args, 10000, save_path='/data1/weather1/HKO-7-master/Test_1_prediction', mode='save', extend='onetime', no_gt=True)
+    #predict(args, 10000, save_path='/data1/weather1/HKO-7-master/Test_1_prediction', mode='save', extend='onetime', no_gt=True)
     
