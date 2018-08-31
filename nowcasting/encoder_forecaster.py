@@ -399,15 +399,15 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
     def discrim_out_info(self):
         a = {}
         if not cfg.MODEL.DISCRIMINATOR.USE_2D:
-            a['shape'] = (self._batch_size,)
+            a['shape'] = (self._batch_size*self._ctx_num,)
             a['layout'] = "N"
         else:
             if not cfg.MODEL.DISCRIMINATOR.PIXEL:
-                a['shape'] = (self._out_seq_len, self._batch_size,)
+                a['shape'] = (self._out_seq_len, self._batch_size*self._ctx_num,)
                 a['layout'] = "TN"
             else:
                 a['shape'] = (self._out_seq_len, 
-                            self._batch_size, 
+                            self._batch_size*self._ctx_num, 
                             1,
                             cfg.MODEL.DISCRIMINATOR.FEATMAP_SIZE[-1],
                             cfg.MODEL.DISCRIMINATOR.FEATMAP_SIZE[-1])
