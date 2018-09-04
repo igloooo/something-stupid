@@ -431,6 +431,7 @@ class SZOEvaluation(object):
                      %(prefix, self._total_batch_num, self._use_central))
         pod, far, csi, hss, gss, weighted_hss, mse, avg_mse = self.calculate_stat()
         if (cfg.MODEL.DATA_MODE == 'rescaled') or (cfg.MODEL.ENCODER_FORECASTER.HAS_MASK):
+            '''
             logging.info("   Hits: " + ', '.join([">%g:%g/%g" % (threshold,
                                                                 self._total_hits[:, i].mean(),
                                                                 self._total_hits[-1, i])
@@ -443,8 +444,11 @@ class SZOEvaluation(object):
                                     for i, threshold in enumerate(self._thresholds)]))
             logging.info("   GSS: " + ', '.join([">%g:%g/%g" % (threshold, gss[:, i].mean(), gss[-1, i])
                                                 for i, threshold in enumerate(self._thresholds)]))
-            logging.info("   HSS: " + ', '.join([">%g:%g/%g" % (threshold, hss[:, i].mean(), hss[-1, i])
-                                                for i, threshold in enumerate(self._thresholds)]))
+            '''
+            logging.info("HSS:\n")
+            logging.info("   ".join([str(threshold) for threshold in self._thresholds])+"\n")
+            for i in range(hss.shape[0]):
+                logging.info("   ".join([str(hss[i,j]) for j in range(len(self._thresholds))])+"\n")
             logging.info("   weighted_HSS: %g"%(weighted_hss))
         elif cfg.MODEL.DATA_MODE == 'original':
             logging.info("   MSE: " + '\n'.join(["%d:%.3f"%(i, d) for i, d in enumerate(mse)]))
@@ -476,6 +480,7 @@ class SZOEvaluation(object):
                   self._seq_len,
                   self._use_central))
         if (cfg.MODEL.DATA_MODE == 'rescaled') or (cfg.MODEL.ENCODER_FORECASTER.HAS_MASK):
+            '''
             for (i, threshold) in enumerate(self._thresholds):
                 f.write("Threshold = %g:\n" %threshold)
                 f.write("   POD: %s\n" %str(list(pod[:, i])))
@@ -488,6 +493,11 @@ class SZOEvaluation(object):
                 f.write("   CSI stat: avg %g/final %g\n" %(csi[:, i].mean(), csi[-1, i]))
                 f.write("   GSS stat: avg %g/final %g\n" %(gss[:, i].mean(), gss[-1, i]))
                 f.write("   HSS stat: avg %g/final %g\n" % (hss[:, i].mean(), hss[-1, i]))
+            '''
+            f.write("HSS:\n")
+            f.write("   ".join([str(threshold) for threshold in self._thresholds])+"\n")
+            for i in range(self._seq_len):
+                f.write("   ".join([str(hss[i,j]) for j in range(len(self._thresholds))])+"\n")
             f.write("Weigthed HSS: %g\n"%(weighted_hss))
         elif cfg.MODEL.DATA_MODE == 'original':
             f.write("   MSE: " + '\n        '.join(["%d:%.3f"%(i, d) for i, d in enumerate(mse)])+'\n')

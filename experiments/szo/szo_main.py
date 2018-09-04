@@ -273,9 +273,12 @@ def train(args):
         with open(os.path.join(base_dir, 'valid_loss_dicts.pkl'), 'rb') as f:
             valid_loss_dicts = pickle.load(f)
         for dicts in (train_loss_dicts, valid_loss_dicts):
+            keys_to_delete = []
             for k in dicts.keys():
                 if k not in loss_types:
-                    del dicts[k]
+                    keys_to_delete.append(k)
+            for k in keys_to_delete:
+                del dicts[k]
     else:
         train_loss_dicts = {}
         valid_loss_dicts = {}
@@ -602,18 +605,22 @@ def predict(args, num_samples, save_path=None, mode='display', extend='none',  n
 
 
 def test(args, batches, checkpoint_id=None, on_train=False):
-    if cfg.MODEL.EXTEND_TO_FULL_OUTLEN:
-        outlen = 30
+    if cfg.MODEL.FRAME_SKIP_OUT == 1:
+        iter_outlen = 30
+        model_outlen = 30
+    elif cfg.MODEL.FRAME_SKIP_OUT == 5:
+        iter_outlen = 6
+        model_outlen = 6
     else:
-        outlen = cfg.MODEL.OUT_LEN
-    evaluator = SZOEvaluation(outlen, False)
+        raise NotImplementedError
+    evaluator = SZOEvaluation(6, False)
     base_dir = get_base_dir(args)
     logging.basicConfig(level=logging.INFO)
     save_cfg(dir_path=base_dir, source=cfg.MODEL)
     if on_train:
         szo_iter = SZOIterator(rec_paths=cfg.SZO_TRAIN_DATA_PATHS,
                                 in_len=cfg.MODEL.IN_LEN,
-                                out_len=outlen,
+                                out_len=iter,
                                 batch_size=cfg.MODEL.TRAIN.BATCH_SIZE,
                                 frame_skip_in=cfg.MODEL.FRAME_SKIP_IN,
                                 frame_skip_out=cfg.MODEL.FRAME_SKIP_OUT,
@@ -621,7 +628,7 @@ def test(args, batches, checkpoint_id=None, on_train=False):
     else:
         szo_iter = SZOIterator(rec_paths=cfg.SZO_TEST_DATA_PATHS,
                                 in_len=cfg.MODEL.IN_LEN,
-                                out_len=outlen,
+                                out_len=iter_outlen,
                                 batch_size=cfg.MODEL.TRAIN.BATCH_SIZE,
                                 frame_skip_in=cfg.MODEL.FRAME_SKIP_IN,
                                 frame_skip_out=cfg.MODEL.FRAME_SKIP_OUT,
@@ -630,7 +637,7 @@ def test(args, batches, checkpoint_id=None, on_train=False):
     szo_nowcasting = SZONowcastingFactory(batch_size=cfg.MODEL.TRAIN.BATCH_SIZE // len(args.ctx),
                                           ctx_num=len(args.ctx),
                                           in_seq_len=cfg.MODEL.IN_LEN,
-                                          out_seq_len=cfg.MODEL.OUT_LEN,
+                                          out_seq_len=model_outlen,
                                           frame_stack=cfg.MODEL.FRAME_STACK)
     encoder_net, forecaster_net, loss_net, discrim_net, loss_D_net = \
         encoder_forecaster_build_networks(
@@ -648,24 +655,22 @@ def test(args, batches, checkpoint_id=None, on_train=False):
     forecaster_net.load_params(os.path.join(base_dir, 'forecaster_net'+'-%04d.params'%(start_iter_id)))
     states = EncoderForecasterStates(factory=szo_nowcasting, ctx=args.ctx[0])
     for i in range(batches):
+        print('batch ', i)
         states.reset_all()
         frame_dat = szo_iter.sample()
         data_nd = frame_dat[0:cfg.MODEL.IN_LEN, :,:,:,:] / 255.0
-        target_nd = frame_dat[cfg.MODEL.IN_LEN:(cfg.MODEL.IN_LEN + cfg.MODEL.OUT_LEN),:,:,:,:] / 255.0
-        pred_nd1 = get_prediction(data_nd, states, encoder_net, forecaster_net)
-        if cfg.MODEL.EXTEND_TO_FULL_OUTLEN:
-            states.reset_all()
-            pred_nd2 = get_prediction(pred_nd1[30-cfg.MODEL.IN_LEN-cfg.MODEL.OUT_LEN: 30-cfg.MODEL.OUT_LEN,:,:,:,:], 
-                                        states, encoder_net, forecaster_net)
-            pred_nd = mx.nd.concat(pred_nd1[:30-cfg.MODEL.OUT_LEN,:,:,:,:], pred_nd2, dim=0)
-        else:
-            pred_nd = pred_nd1
+        target_nd = frame_dat[cfg.MODEL.IN_LEN:,:,:,:,:] / 255.0
+        pred_nd = get_prediction(data_nd, states, encoder_net, forecaster_net)
 
         # generate mask from target_nd
         if cfg.MODEL.ENCODER_FORECASTER.HAS_MASK:
             target_nd = target_nd * (255.0/80.0)
             pred_nd = pred_nd * (255.0/80.0)
-        mask_nd = (target_nd == 0.0)
+        mask_nd = (target_nd > 0.0)*(pred_nd > (cfg.MODEL.DISPLAY_EPSILON/255.0))
+        if cfg.MODEL.FRAME_SKIP_OUT == 1:
+            target_nd = target_nd[4::5,:,:,:,:]
+            pred_nd = pred_nd[4::5,:,:,:,:]
+            mask_nd = mask_nd[4::5,:,:,:,:]
         evaluator.update(target_nd.asnumpy(), pred_nd.asnumpy(), mask_nd.asnumpy())
     evaluator.print_stat_readable()
     filename = 'test_result_%03d'%(start_iter_id)
@@ -679,7 +684,7 @@ def test(args, batches, checkpoint_id=None, on_train=False):
 if __name__ == "__main__":
     args = parse_args()
     train(args)
-    #test(args, 200)
+    #test(args, 400)
 
     #predict(args, 10000, save_path='/data1/weather1/HKO-7-master/Test_1_prediction', mode='save', extend='onetime', no_gt=True)
     
