@@ -18,7 +18,7 @@ import time
 import re
 
 class SZOIterator:
-    def __init__(self, rec_paths, in_len, out_len, batch_size, ctx, frame_skip_in=1, frame_skip_out=1, auto_add_file=False, no_gt=False):
+    def __init__(self, rec_paths, in_len, out_len, batch_size, ctx, frame_skip_in=1, frame_skip_out=1, auto_add_file=False):
         if isinstance(rec_paths, list):
             self.rec_paths = rec_paths
         else:
@@ -29,9 +29,14 @@ class SZOIterator:
         self.batch_size = batch_size
         self.frame_skip_in = frame_skip_in
         self.frame_skip_out = frame_skip_out
-        self.no_gt = no_gt
+        
+        # load names of folders and get sequence length
+        self.folders=[]
+        prefix = self.rec_paths[0].split('.')[0]
+        self.load_lst(prefix+'.lst')
+        self.seq_ind = -self.batch_size
+
         self.dataset_ind = 0
-        self.data_seq_length = cfg.SZO.DATA.TOTAL_LEN if not self.no_gt else 31
         self.image_iterator = mx.io.ImageRecordIter(
                                     path_imgrec=self.rec_paths[self.dataset_ind],
                                     data_shape=(1, cfg.SZO.DATA.SIZE, cfg.SZO.DATA.SIZE),
@@ -46,14 +51,22 @@ class SZOIterator:
         else:
             self.ctx = ctx    
 
-        self.folders=[]
-        prefix = self.rec_paths[0].split('.')[0]
-        self.load_lst(prefix+'.lst')
-        self.seq_ind = -self.batch_size
         
     def load_lst(self, lst_path):
         if os.path.exists(lst_path):
             with open(lst_path, 'r') as f:
+                f.seek(0)
+                last_name = None
+                for i, line in enumerate(f):
+                    file_path = re.split(r'\s+', line)[-2]
+                    folder_name = file_path.split('/')[-2]  # the name of the folder
+                    if (last_name is None) or (last_name == folder_name):
+                        last_name = folder_name
+                    else:
+                        break
+                self.data_seq_length = i
+                assert self.data_seq_length in (31, cfg.SZO.DATA.TOTAL_LEN)
+                logging.info("sequence length {}".format(self.data_seq_length))
                 f.seek(0)
                 for i, line in enumerate(f):
                     if i%self.data_seq_length == 0:
@@ -61,8 +74,11 @@ class SZOIterator:
                         path_names = file_path.split('/')[:-1]
                         self.folders.append(path_names)
         else:
-            logging.warning('no lst file found')
+            raise FileNotFoundError('no lst file found')
             self.folders = None
+
+    def no_gt(self):
+        return self.data_seq_length == 31
 
     def sample(self, fix_shift=False):    
         """
@@ -90,7 +106,7 @@ class SZOIterator:
         end1 = shift+(self.in_len-1)*self.frame_skip_in+1
         start2 = shift+(self.in_len-1)*self.frame_skip_in+self.frame_skip_out
         end2 = shift+(self.in_len-1)*self.frame_skip_in+self.out_len*self.frame_skip_out+1
-        if not self.no_gt:
+        if not self.no_gt():
             frames1 = frames[start1:end1:self.frame_skip_in,:,:,:,:]
             frames2 = frames[start2:end2:self.frame_skip_out,:,:,:,:]
             frames = mx.nd.concat(frames1, frames2, dim=0)

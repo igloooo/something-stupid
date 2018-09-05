@@ -497,7 +497,7 @@ the change hasn't been complete
 2 when saving images, the naming should be considered(especially shift)
 '''
 
-def predict(args, num_samples, save_path=None, mode='display', extend='none',  no_gt=False):
+def predict(args, num_samples, save_path=None, mode='display', extend='none'):
     """
     mode can be either display or save
     under display mode, num_samples gifs and comparisons are saved.
@@ -523,8 +523,8 @@ def predict(args, num_samples, save_path=None, mode='display', extend='none',  n
                                batch_size=1,
                                frame_skip_in=cfg.MODEL.FRAME_SKIP_IN,
                                frame_skip_out=cfg.MODEL.FRAME_SKIP_OUT,
-                               ctx=args.ctx,
-                               no_gt=no_gt)  # there can be no ground truth available
+                               ctx=args.ctx)  # there can be no ground truth available
+    no_gt = szo_iterator.no_gt()
     szo_nowcasting = SZONowcastingFactory(batch_size=1,
                                           ctx_num=1,
                                           in_seq_len=cfg.MODEL.IN_LEN,
@@ -686,5 +686,5 @@ if __name__ == "__main__":
     train(args)
     #test(args, 400)
 
-    #predict(args, 10000, save_path='/data1/weather1/HKO-7-master/Test_1_prediction', mode='save', extend='onetime', no_gt=True)
+    #predict(args, 10000, save_path='/data1/weather1/HKO-7-master/Test_1_prediction', mode='save', extend='onetime')
     
