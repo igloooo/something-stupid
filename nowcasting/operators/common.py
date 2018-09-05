@@ -374,6 +374,7 @@ def masked_gdl_loss(pred, gt, mask):
                    mx.sym.slice_axis(mask, axis=3, begin=1, end=None)
     valid_mask_w = mx.sym.slice_axis(mask, axis=4, begin=0, end=-1) *\
                    mx.sym.slice_axis(mask, axis=4, begin=1, end=None)
+    '''
     pred_diff_h = mx.sym.abs(one_step_diff(pred, axis=3))
     pred_diff_w = mx.sym.abs(one_step_diff(pred, axis=4))
     gt_diff_h = mx.sym.abs(one_step_diff(gt, axis=3))
@@ -382,6 +383,15 @@ def masked_gdl_loss(pred, gt, mask):
     gd_w = mx.sym.abs(pred_diff_w - gt_diff_w)
     gdl = mx.sym.sum(valid_mask_h * gd_h, axis=(2, 3, 4)) +\
           mx.sym.sum(valid_mask_w * gd_w, axis=(2, 3, 4))
+    '''
+    pred_diff_h = one_step_diff(pred, axis=3)
+    pred_diff_w = one_step_diff(pred, axis=4)
+    gt_diff_h = one_step_diff(gt, axis=3)
+    gt_diff_w = one_step_diff(gt, axis=4)
+    gd_h = mx.sym.abs(pred_diff_h-gt_diff_h)
+    gd_w = mx.sym.abs(pred_diff_w-gt_diff_w)
+    gdl = mx.sym.sum(valid_mask_h*gd_h, axis=(2,3,4)) +\
+          mx.sym.sum(valid_mask_w*gd_w, axis=(2,3,4))
     return gdl
 
 

@@ -133,7 +133,16 @@ class SZONowcastingFactory(EncoderForecasterBaseFactory):
                     inputs = video
                 else:
                     inputs = output
-                output = conv2d_bn_act(data=inputs, 
+                if (i == num_layers - 1) and cfg.MODEL.DISCRIMINATOR.PIXEL: # this is a stupid and temporary chagne
+                    output = conv2d_act(data=inputs,
+                                        num_filter=cfg.MODEL.DISCRIMINATOR.DISCRIM_CONV[i]['num_filter'],
+                                        kernel=cfg.MODEL.DISCRIMINATOR.DISCRIM_CONV[i]['kernel'],
+                                        stride=cfg.MODEL.DISCRIMINATOR.DISCRIM_CONV[i]['stride'],
+                                        pad=cfg.MODEL.DISCRIMINATOR.DISCRIM_CONV[i]['padding'],
+                                        act_type=cfg.MODEL.CNN_ACT_TYPE,
+                                        name='discrim_conv'+str(i))
+                else:
+                    output = conv2d_bn_act(data=inputs, 
                                     num_filter=cfg.MODEL.DISCRIMINATOR.DISCRIM_CONV[i]['num_filter'],
                                     kernel=cfg.MODEL.DISCRIMINATOR.DISCRIM_CONV[i]['kernel'],
                                     stride=cfg.MODEL.DISCRIMINATOR.DISCRIM_CONV[i]['stride'],

@@ -124,7 +124,7 @@ __C.SZO.ITERATOR.RESIZED_SIZE = __C.SZO.DATA.SIZE // __C.SZO.ITERATOR.DOWN_RATIO
 
 __C.SZO.EVALUATION = edict()
 __C.SZO.EVALUATION.THRESHOLD_WEIGHTS = (1, 2, 3, 4, 5, 6) #  (1, 1, 2, 5, 10, 30)  # The corresponding balancing weights
-__C.SZO.EVALUATION.THRESHOLDS = (10, 20, 30, 50，60，70)  # (0.5, 2, 5, 10, 30)
+__C.SZO.EVALUATION.THRESHOLDS = (10, 20, 30, 50, 60, 70)  # (0.5, 2, 5, 10, 30)
 __C.SZO.EVALUATION.TEMPORAL_WEIGHT_SLOPE = 0.1  # start with 1
 __C.SZO.EVALUATION.ZR = edict()
 __C.SZO.EVALUATION.ZR.a = 58.53  # The a factor in the Z-R relationship

@@ -708,9 +708,9 @@ def train_step(batch_size, encoder_net, forecaster_net,
         return init_states, loss_dict, pred_nd, buffers
     # train the discriminator
     loss_dict['dis_output'] = 0.0
-
+    
     for dis_iter in range(cfg.MODEL.TRAIN.DISCRIM_LOOP):   
-        dis_loss = 0.0
+        dis_loss = 0.0    
         pred_nd_sample = mx.nd.concat(*random.sample(buffers['fake'], batch_size))
         gt_nd_sample = mx.nd.concat(*random.sample(buffers['true'], batch_size))
         
