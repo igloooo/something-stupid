@@ -268,10 +268,11 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
 
     def encoder_data_desc(self):
         ret = list()
+        channels = 3 if cfg.MODEL.OPTFLOW_AS_INPUT else 1
         ret.append(mx.io.DataDesc(name='data',
                                   shape=(self._in_seq_len,
                                          self._batch_size * self._ctx_num,
-                                         1,
+                                         channels,
                                          self._height,
                                          self._width),
                                   layout="TNCHW"))

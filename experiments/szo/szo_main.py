@@ -211,10 +211,11 @@ def train(args):
     logging_config(folder=base_dir)
     save_cfg(dir_path=base_dir, source=cfg.MODEL)
 
-    if cfg.MODEL.EXTEND_TO_FULL_OUTLEN:
-        iter_outlen = 30
-    else:  # onetime or none
+    if cfg.MODEL.FRAME_SKIP_OUT > 1:
+        # here assume the target span the last 30 frames 
         iter_outlen = cfg.MODEL.OUT_LEN
+    else:
+        iter_outlen = 30
     model_outlen = cfg.MODEL.OUT_LEN  # training on 30 costs too much memory
 
     train_szo_iter = SZOIterator(rec_paths=cfg.SZO_TRAIN_DATA_PATHS,
@@ -297,19 +298,17 @@ def train(args):
         cumulative_loss[k] = 0.0
 
     iter_id = start_iter_id + 1
-    if cfg.MODEL.EXTEND_TO_FULL_OUTLEN:
-        second_period_flag = False
+    fix_shift = True if cfg.MODEL.OPTFLOW_AS_INPUT  else False
+    chan = cfg.SZO.DATA.IMAGE_CHANNEL if cfg.MODEL.OPTFLOW_AS_INPUT else 0
     buffers = {}
     buffers['fake'] = deque([], maxlen=cfg.MODEL.TRAIN.GEN_BUFFER_LEN)
     buffers['true'] = deque([], maxlen=cfg.MODEL.TRAIN.GEN_BUFFER_LEN)
     while iter_id < cfg.MODEL.TRAIN.MAX_ITER:
-        if cfg.MODEL.EXTEND_TO_FULL_OUTLEN and second_period_flag:
-            data_nd = data_nd_next
-            target_nd = target_nd_next
-        else:
-            frame_dat = train_szo_iter.sample()
-            data_nd = frame_dat[0:cfg.MODEL.IN_LEN,:,:,:,:] / 255.0  # scale to [0,1]
-            target_nd = frame_dat[cfg.MODEL.IN_LEN:(cfg.MODEL.IN_LEN + cfg.MODEL.OUT_LEN),:,:,:,:] / 255.0
+        frame_dat = train_szo_iter.sample(fix_shift=fix_shift)
+        data_nd = frame_dat[0:cfg.MODEL.IN_LEN,:,:,:,:] / 255.0  # scale to [0,1]
+        # only take the channel of grey scale
+        target_nd = frame_dat[cfg.MODEL.IN_LEN:(cfg.MODEL.IN_LEN + cfg.MODEL.OUT_LEN),:,chan,:,:] / 255.0
+        target_nd = target_nd.expand_dims(axis=2)
         states.reset_all()
         if cfg.MODEL.ENCODER_FORECASTER.HAS_MASK:
             mask_nd = target_nd < 1.0
@@ -325,29 +324,14 @@ def train(args):
         for k in cumulative_loss.keys():
             loss = loss_dict[k+'_output']
             cumulative_loss[k] += loss
-        if cfg.MODEL.EXTEND_TO_FULL_OUTLEN:
-            if second_period_flag:
-                second_period_flag = False
-            else:
-                second_period_flag = True
-                data_nd_next = pred_nd[30-cfg.MODEL.IN_LEN-cfg.MODEL.OUT_LEN: 30-cfg.MODEL.OUT_LEN,:,:,:,:] / 255.0
-                target_nd_next = frame_dat[30+cfg.MODEL.IN_LEN-cfg.MODEL.OUT_LEN:,:,:,:,:] / 255.0
 
         if (iter_id+1) % cfg.MODEL.VALID_ITER == 0:
-            if cfg.MODEL.EXTEND_TO_FULL_OUTLEN:
-                valid_second_period_flag = False
-                iters = 2*cfg.MODEL.VALID_LOOP
-            else:
-                iters = cfg.MODEL.VALID_LOOP
-            for i in range(iters):
-                states.reset_all()
-                if cfg.MODEL.EXTEND_TO_FULL_OUTLEN and valid_second_period_flag:
-                    data_nd_v = data_nd_v_next
-                    gt_nd_v = gt_nd_v_next
-                else:
-                    frame_dat_v = valid_szo_iter.sample()
-                    data_nd_v = frame_dat_v[0:cfg.MODEL.IN_LEN,:,:,:,:] / 255.0
-                    gt_nd_v = frame_dat_v[cfg.MODEL.IN_LEN:(cfg.MODEL.IN_LEN+cfg.MODEL.OUT_LEN),:,:,:,:] / 255.0
+            for i in range(cfg.MODEL.VALID_LOOP):
+                states.reset_all()            
+                frame_dat_v = valid_szo_iter.sample(fix_shift=fix_shift)
+                data_nd_v = frame_dat_v[0:cfg.MODEL.IN_LEN,:,:,:,:] / 255.0
+                gt_nd_v = frame_dat_v[cfg.MODEL.IN_LEN:(cfg.MODEL.IN_LEN+cfg.MODEL.OUT_LEN),:,chan,:,:] / 255.0
+                gt_nd_v = gt_nd_v.expand_dims(axis=2)
                 if cfg.MODEL.ENCODER_FORECASTER.HAS_MASK:
                     mask_nd_v = gt_nd_v < 1.0
                 else:
@@ -364,16 +348,9 @@ def train(args):
                 else:
                     for k in valid_loss_dicts.keys():
                         valid_loss_dicts[k][-1] += new_valid_loss_dicts[k]
-                if cfg.MODEL.EXTEND_TO_FULL_OUTLEN:
-                    if valid_second_period_flag:
-                        valid_second_period_flag = False
-                    else:
-                        valid_second_period_flag = True
-                        data_nd_v_next = pred_nd_v[30-cfg.MODEL.IN_LEN-cfg.MODEL.OUT_LEN: 30-cfg.MODEL.OUT_LEN,:,:,:,:] / 255.0
-                        gt_nd_v_next = frame_dat_v[30+cfg.MODEL.IN_LEN-cfg.MODEL.OUT_LEN:,:,:,:,:] / 255.0
-
+                
             for k in valid_loss_dicts.keys():
-                valid_loss_dicts[k][-1] /= (iters)
+                valid_loss_dicts[k][-1] /= cfg.MODEL.VALID_LOOP
                 plot_loss_curve(os.path.join(base_dir, 'valid_'+k+'_loss'), valid_loss_dicts[k])
             
         if (iter_id+1) % cfg.MODEL.DRAW_EVERY == 0:
@@ -391,19 +368,13 @@ def train(args):
                 plot_loss_curve(os.path.join(base_dir, 'train_'+k+'_loss'), train_loss_dicts[k])
 
         if (iter_id+1) % cfg.MODEL.DISPLAY_EVERY == 0:
-            new_frame_dat = train_szo_iter.sample()
+            new_frame_dat = train_szo_iter.sample(fix_shift=fix_shift)
             data_nd_d = new_frame_dat[0:cfg.MODEL.IN_LEN,:,:,:,:] / 255.0
-            target_nd_d = new_frame_dat[cfg.MODEL.IN_LEN:,:,:,:,:] / 255.0
+            target_nd_d = new_frame_dat[cfg.MODEL.IN_LEN:(cfg.MODEL.IN_LEN + cfg.MODEL.OUT_LEN),:,chan,:,:] / 255.0
+            target_nd_d = target_nd_d.expand_dims(axis=2)
             states.reset_all()
-            pred_nd_d1 = get_prediction(data_nd_d, states, encoder_net, forecaster_net)
-            if cfg.MODEL.EXTEND_TO_FULL_OUTLEN:
-                states.reset_all()
-                pred_nd_d2 = get_prediction(pred_nd_d1[30-cfg.MODEL.IN_LEN-cfg.MODEL.OUT_LEN: 30-cfg.MODEL.OUT_LEN,:,:,:,:], 
-                                            states, encoder_net, forecaster_net)
-                pred_nd_d = mx.nd.concat(pred_nd_d1[:30-cfg.MODEL.OUT_LEN,:,:,:,:],pred_nd_d2, dim=0)
-            else:
-                pred_nd_d = pred_nd_d1
-            
+            pred_nd_d = get_prediction(data_nd_d, states, encoder_net, forecaster_net)
+
             display_path1 = os.path.join(base_dir, 'display_'+str(iter_id))
             display_path2 = os.path.join(base_dir, 'display_'+str(iter_id)+'_')
             if not os.path.exists(display_path1):
@@ -414,8 +385,8 @@ def train(args):
             data_nd_d = (data_nd_d*255.0).clip(0, 255.0)
             target_nd_d = (target_nd_d*255.0).clip(0, 255.0)
             pred_nd_d = (pred_nd_d*255.0).clip(0, 255.0)
-            save_prediction(data_nd_d[:,0,0,:,:], target_nd_d[:,0,0,:,:], pred_nd_d[:,0,0,:,:], display_path1, default_as_0=True)
-            save_prediction(data_nd_d[:,0,0,:,:], target_nd_d[:,0,0,:,:], pred_nd_d[:,0,0,:,:], display_path2, default_as_0=False)
+            save_prediction(data_nd_d[:,0,chan,:,:], target_nd_d[:,0,0,:,:], pred_nd_d[:,0,0,:,:], display_path1, default_as_0=True)
+            save_prediction(data_nd_d[:,0,chan,:,:], target_nd_d[:,0,0,:,:], pred_nd_d[:,0,0,:,:], display_path2, default_as_0=False)
         if (iter_id+1) % cfg.MODEL.SAVE_ITER == 0:
             encoder_net.save_checkpoint(
                 prefix=os.path.join(base_dir, "encoder_net",),
@@ -488,15 +459,6 @@ def valid_step(batch_size, encoder_net, forecaster_net,
     return init_states, new_valid_loss_dicts, pred_nd
 
 
-###
-'''
-2018.8.26 note
-the change hasn't been complete
-1 a new mode in parallel to "extend to full outlen" is needed
-(or i should just abandon the flag cfg.MODEL.EXTEND_TO_FULL_OUTLEN )
-2 when saving images, the naming should be considered(especially shift)
-'''
-
 def predict(args, num_samples, save_path=None, mode='display', extend='none'):
     """
     mode can be either display or save
@@ -506,6 +468,7 @@ def predict(args, num_samples, save_path=None, mode='display', extend='none'):
     """
     assert len(args.ctx) == 1
     base_dir = get_base_dir(args)
+    chan = cfg.SZO.DATA.IMAGE_CHANNEL if cfg.MODEL.OPTFLOW_AS_INPUT else 0
     if extend == 'recursive':
         assert (cfg.MODEL.FRAME_SKIP_IN) == 1 and (cfg.MODEL.FRAME_SKIP_OUT==1), '"extend" should be "none" when frame_skip is not 1'
         iter_outlen = 30
@@ -549,7 +512,11 @@ def predict(args, num_samples, save_path=None, mode='display', extend='none'):
     for i in range(num_samples):
         new_frame_dat, folder_names = szo_iterator.get_sample_name_pair(fix_shift=True)
         data_nd_d = new_frame_dat[0:cfg.MODEL.IN_LEN,:,:,:,:] / 255.0
-        target_nd_d = new_frame_dat[cfg.MODEL.IN_LEN:,:,:,:,:] / 255.0 if not no_gt else None
+        if not no_gt:
+            target_nd_d = new_frame_dat[cfg.MODEL.IN_LEN:,:,chan,:,:] / 255.0
+            target_nd_d = target_nd_d.expand_dims(axis=2)
+        else:
+            target_nd_d = None
         states.reset_all()
         pred_nd_d1 = get_prediction(data_nd_d, states, encoder_net, forecaster_net)
         if extend == 'recursive':
@@ -577,11 +544,11 @@ def predict(args, num_samples, save_path=None, mode='display', extend='none'):
                 os.mkdir(display_path2)
 
             if not no_gt:
-                save_prediction(data_nd_d[:,0,0,:,:], target_nd_d[:,0,0,:,:], pred_nd_d[:,0,0,:,:], display_path1, default_as_0=True)
-                save_prediction(data_nd_d[:,0,0,:,:], target_nd_d[:,0,0,:,:], pred_nd_d[:,0,0,:,:], display_path2, default_as_0=False)
+                save_prediction(data_nd_d[:,0,chan,:,:], target_nd_d[:,0,0,:,:], pred_nd_d[:,0,0,:,:], display_path1, default_as_0=True)
+                save_prediction(data_nd_d[:,0,chan,:,:], target_nd_d[:,0,0,:,:], pred_nd_d[:,0,0,:,:], display_path2, default_as_0=False)
             else:
-                save_prediction(data_nd_d[:,0,0,:,:], None, pred_nd_d[:,0,0,:,:], display_path1, default_as_0=True)
-                save_prediction(data_nd_d[:,0,0,:,:], None, pred_nd_d[:,0,0,:,:], display_path2, default_as_0=False)
+                save_prediction(data_nd_d[:,0,chan,:,:], None, pred_nd_d[:,0,0,:,:], display_path1, default_as_0=True)
+                save_prediction(data_nd_d[:,0,chan,:,:], None, pred_nd_d[:,0,0,:,:], display_path2, default_as_0=False)
 
             plt.hist(pred_nd_d.asnumpy().reshape([-1]), bins=100)
             plt.savefig(os.path.join(base_dir, 'hist'+str(i)))
@@ -596,9 +563,9 @@ def predict(args, num_samples, save_path=None, mode='display', extend='none'):
             folder_name = folder_names[0][-1]
 
             if not no_gt:
-                save_prediction(data_nd_d[:,0,0,:,:], target_nd_d[:,0,0,:,:], pred_nd_d[:,0,0,:,:], None, default_as_0=False, mode='save', folder_name=folder_name, gt_path=gt_path, pred_path=pred_path)
+                save_prediction(data_nd_d[:,0,chan,:,:], target_nd_d[:,0,0,:,:], pred_nd_d[:,0,0,:,:], None, default_as_0=False, mode='save', folder_name=folder_name, gt_path=gt_path, pred_path=pred_path)
             else:
-                save_prediction(data_nd_d[:,0,0,:,:], None, pred_nd_d[:,0,0,:,:], None, default_as_0=False, mode='save', folder_name=folder_name, gt_path=gt_path, pred_path=pred_path)
+                save_prediction(data_nd_d[:,0,chan,:,:], None, pred_nd_d[:,0,0,:,:], None, default_as_0=False, mode='save', folder_name=folder_name, gt_path=gt_path, pred_path=pred_path)
 
         else:
             raise NotImplementedError
@@ -654,12 +621,15 @@ def test(args, batches, checkpoint_id=None, on_train=False):
     encoder_net.load_params(os.path.join(base_dir, 'encoder_net'+'-%04d.params'%(start_iter_id)))
     forecaster_net.load_params(os.path.join(base_dir, 'forecaster_net'+'-%04d.params'%(start_iter_id)))
     states = EncoderForecasterStates(factory=szo_nowcasting, ctx=args.ctx[0])
+    fix_shift = True if cfg.MODEL.OPTFLOW_AS_INPUT else False
+    chan = cfg.SZO.DATA.IMAGE_CHANNEL if cfg.MODEL.OPTFLOW_AS_INPUT else 0
     for i in range(batches):
         print('batch ', i)
         states.reset_all()
-        frame_dat = szo_iter.sample()
+        frame_dat = szo_iter.sample(fix_shift=fix_shift)
         data_nd = frame_dat[0:cfg.MODEL.IN_LEN, :,:,:,:] / 255.0
-        target_nd = frame_dat[cfg.MODEL.IN_LEN:,:,:,:,:] / 255.0
+        target_nd = frame_dat[cfg.MODEL.IN_LEN:,:,chan,:,:] / 255.0
+        target_nd = target_nd.expand_dims(axis=2)
         pred_nd = get_prediction(data_nd, states, encoder_net, forecaster_net)
 
         # generate mask from target_nd
@@ -688,3 +658,4 @@ if __name__ == "__main__":
 
     #predict(args, 10000, save_path='/data1/weather1/HKO-7-master/Test_1_prediction', mode='save', extend='onetime')
     
+

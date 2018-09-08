@@ -37,9 +37,12 @@ class SZOIterator:
         self.seq_ind = -self.batch_size
 
         self.dataset_ind = 0
+
+        self.channels = 3 if cfg.MODEL.OPTFLOW_AS_INPUT else 1
+
         self.image_iterator = mx.io.ImageRecordIter(
                                     path_imgrec=self.rec_paths[self.dataset_ind],
-                                    data_shape=(1, cfg.SZO.DATA.SIZE, cfg.SZO.DATA.SIZE),
+                                    data_shape=(self.channels, cfg.SZO.DATA.SIZE, cfg.SZO.DATA.SIZE),
                                     batch_size=self.data_seq_length*self.batch_size,
                                     prefectch_buffer=4,
                                     preprocess_threads=4
@@ -83,7 +86,8 @@ class SZOIterator:
     def sample(self, fix_shift=False):    
         """
         return tensor of 
-        shape [self.in_len+self.out_len, self.batch_size, 1, cfg.SZO.DATA.SIZE, cfg.SZO.DATA.SIZE]
+        shape [self.in_len+self.out_len, self.batch_size, 1, cfg.SZO.DATA.SIZE, cfg.SZO.DATA.SIZE] (if not using optical flow)
+           or [self.in_len+self.out_len, self.batch_size, 3, cfg.SZO.DATA.SIZE, cfg.SZO.DATA.SIZE] (if using optical flow)
         pixel value [0,255] np.float32
         context self.ctx
         """
@@ -95,7 +99,7 @@ class SZOIterator:
         finally:
             self.seq_ind += self.batch_size
             #frames = batch.data[0][:,0,:cfg.SZO.DATA.SIZE,:cfg.SZO.DATA.SIZE]
-            frames = batch.data[0].reshape([self.batch_size, self.data_seq_length, 1, cfg.SZO.DATA.SIZE, cfg.SZO.DATA.SIZE])
+            frames = batch.data[0].reshape([self.batch_size, self.data_seq_length, self.channels, cfg.SZO.DATA.SIZE, cfg.SZO.DATA.SIZE])
             frames = frames.transpose([1,0,2,3,4]) # to make frames in a video appear consecutively
         max_shift = cfg.SZO.DATA.TOTAL_LEN - (self.in_len-1)*self.frame_skip_in - self.out_len*self.frame_skip_out - 1
         if fix_shift:
@@ -106,6 +110,9 @@ class SZOIterator:
         end1 = shift+(self.in_len-1)*self.frame_skip_in+1
         start2 = shift+(self.in_len-1)*self.frame_skip_in+self.frame_skip_out
         end2 = shift+(self.in_len-1)*self.frame_skip_in+self.out_len*self.frame_skip_out+1
+        if cfg.MODEL.OPTFLOW_AS_INPUT:
+            assert end1 <= 31
+            assert start2 >= 31
         if not self.no_gt():
             frames1 = frames[start1:end1:self.frame_skip_in,:,:,:,:]
             frames2 = frames[start2:end2:self.frame_skip_out,:,:,:,:]
@@ -116,8 +123,12 @@ class SZOIterator:
             assert frames.shape[0] == self.in_len
 
         if cfg.MODEL.DATA_MODE == 'rescaled':
-            frames = frames * (frames<255) * (255.0/80.0)
+            if cfg.MODEL.OPTFLOW_AS_INPUT:
+                pass
+            else:
+                frames = frames * (frames<255) * (255.0/80.0)
         elif cfg.MODEL.DATA_MODE == 'original':
+            assert cfg.MODEL.ENCODER_FORECASTER.HAS_MASK == False
             pass
         else:
             raise NotImplementedError
@@ -150,7 +161,7 @@ class SZOIterator:
         print('switching to {}'.format(next_file))
         self.image_iterator = mx.io.ImageRecordIter(
                                     path_imgrec=next_file,
-                                    data_shape=(1, cfg.SZO.DATA.SIZE, cfg.SZO.DATA.SIZE),
+                                    data_shape=(self.channels, cfg.SZO.DATA.SIZE, cfg.SZO.DATA.SIZE),
                                     batch_size = self.batch_size * self.data_seq_length,
                                     )
         self.image_iterator.reset()
@@ -214,9 +225,18 @@ def save_png_sequence(np_seqs, path):
 
 def save_gif_examples(num, train_iterator=None, save_path=None):
     if train_iterator is None:
+        if cfg.MODEL.OPTFLOW_AS_INPUT:
+            fix_shift = True 
+            if cfg.MODEL.FRAME_SKIP_OUT == 1:
+                iter_out = 30
+            else:
+                iter_out = cfg.MODEL.OUT_LEN
+        else:
+            fix_shift = False
+            iter_out = cfg.MODEL.OUT_LEN
         train_iterator = SZOIterator(rec_paths=cfg.SZO_TRAIN_DATA_PATHS,
                                      in_len=cfg.MODEL.IN_LEN,
-                                     out_len=cfg.MODEL.OUT_LEN,
+                                     out_len=iter_out,
                                      batch_size=1,
                                      frame_skip_in=cfg.MODEL.FRAME_SKIP_IN,
                                      frame_skip_out=cfg.MODEL.FRAME_SKIP_OUT,
@@ -225,13 +245,14 @@ def save_gif_examples(num, train_iterator=None, save_path=None):
         save_path = 'data_display'
 
     for i in range(num):
-        train_batch = train_iterator.sample()
+        train_batch = train_iterator.sample(fix_shift=fix_shift)
+        chan = cfg.SZO.DATA.IMAGE_CHANNEL if cfg.MODEL.OPTFLOW_AS_INPUT else 0
         if cfg.MODEL.DATA_MODE == 'original':
-            wb_examples = train_batch[:,0,0,:,:].asnumpy().astype(np.uint8)
+            wb_examples = train_batch[:,0,chan,:,:].asnumpy().astype(np.uint8)
             bb_examples = ((wb_examples*(wb_examples<255))*(255/80)).astype(np.uint8)
         elif cfg.MODEL.DATA_MODE == 'rescaled':
             epsilon = cfg.MODEL.DISPLAY_EPSILON
-            bb_examples = train_batch[:,0,0,:,:].asnumpy()
+            bb_examples = train_batch[:,0,chan,:,:].asnumpy()
             bb_examples = bb_examples.astype(np.uint8)
             mask = bb_examples<epsilon
             wb_examples = (bb_examples*(1-mask)*(80/255) + mask*255).astype(np.uint8)

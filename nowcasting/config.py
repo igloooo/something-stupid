@@ -112,6 +112,7 @@ __C.SZO = edict()
 __C.SZO.DATA = edict()
 __C.SZO.DATA.SIZE = 500
 __C.SZO.DATA.TOTAL_LEN = 61
+__C.SZO.DATA.IMAGE_CHANNEL = 2
 
 __C.SZO.ITERATOR = edict()
 __C.SZO.ITERATOR.DOWN_RATIO = 1
@@ -158,6 +159,7 @@ __C.MODEL.LOAD_ITER = 79999           # Only applicable when LOAD_DIR is non-emp
 __C.MODEL.SAVE_DIR = ""
 __C.MODEL.CNN_ACT_TYPE = "leaky"
 __C.MODEL.RNN_ACT_TYPE = "leaky"
+__C.MODEL.OPTFLOW_AS_INPUT = False
 __C.MODEL.FRAME_STACK = 1          # Stack multiple frames as the input
 __C.MODEL.FRAME_SKIP_IN = 1           # The frame skip size of input
 __C.MODEL.FRAME_SKIP_OUT = 1
