@@ -124,8 +124,8 @@ __C.SZO.ITERATOR.RESIZED_SIZE = __C.SZO.DATA.SIZE // __C.SZO.ITERATOR.DOWN_RATIO
 
 
 __C.SZO.EVALUATION = edict()
-__C.SZO.EVALUATION.THRESHOLD_WEIGHTS = (1, 2, 3, 4, 5, 6) #  (1, 1, 2, 5, 10, 30)  # The corresponding balancing weights
-__C.SZO.EVALUATION.THRESHOLDS = (10, 20, 30, 50, 60, 70)  # (0.5, 2, 5, 10, 30)
+__C.SZO.EVALUATION.THRESHOLD_WEIGHTS = (1, 2, 3, 4, 5, 6,7,8,9) #  (1, 1, 2, 5, 10, 30)  # The corresponding balancing weights
+__C.SZO.EVALUATION.THRESHOLDS = (10, 20, 30, 35, 40, 45, 50, 60, 70)  # (0.5, 2, 5, 10, 30)
 __C.SZO.EVALUATION.TEMPORAL_WEIGHT_SLOPE = 0.1  # start with 1
 __C.SZO.EVALUATION.ZR = edict()
 __C.SZO.EVALUATION.ZR.a = 58.53  # The a factor in the Z-R relationship
@@ -182,12 +182,16 @@ __C.MODEL.GAN_G_LAMBDA = 0.2
 __C.MODEL.GAN_D_LAMBDA = 0.2
 __C.MODEL.EXTEND_TO_FULL_OUTLEN = False
 
-__C.MODEL.DATA_MODE = 'original'  # 'rescaled' or 'original'
+__C.MODEL.DATA_MODE = 'rescaled'  # 'rescaled' or 'original'
 __C.MODEL.BALANCE_FACTOR = 0.15  # under 'original' mode
 # the following two don't have to be the same with SZO.EVALUATION._
 __C.MODEL.THRESHOLDS = (10, 20, 30, 50)  #(0.5, 2, 5, 10, 30)  # under 'rescaled mode', in dbz
 __C.MODEL.BALANCING_WEIGHTS = (1, 2, 4, 7, 11)  #(1, 1, 2, 5, 10, 30)  # The corresponding balancing weights
-__C.MODEL.DISPLAY_EPSILON = 0.0  # under 'rescaled mode'
+__C.MODEL.USE_GWEIGHTS = False
+__C.MODEL.THRESHOLD_GRADIENT = (1,)
+__C.MODEL.BALANCING_WEIGHTS_GRADIENT = (1,1)
+__C.MODEL.GRAD_BLUR_KERNEL_SIZE = (10，10)
+__C.MODEL.DISPLAY_EPSILON = 3.0  # under 'rescaled mode'
 
 __C.MODEL.TRAJRNN = edict()
 __C.MODEL.TRAJRNN.INIT_GRID = True

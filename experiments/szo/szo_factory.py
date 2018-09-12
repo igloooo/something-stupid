@@ -28,6 +28,25 @@ def get_temporal_weight_symbol(seq_len):
     else:
         raise NotImplementedError
 
+def get_gradient_norm_symbold(data):
+    """
+    assume data has layout TNCHW
+    """
+    x_diff = one_step_diff(data, axis=3)
+    y_diff = one_step_diff(data, axis=4)
+    x_diff = x_diff.slice_axis(axis=4, begin=0, end=-1)
+    y_diff = y_diff.slice_axis(axis=3, begin=0, end=-1)
+    g_norm = mx.sym.sqrt(mx.sym.square(x_diff)+mx.sym.square(y_diff))
+    g_norm = mx.sym.pad(g_norm, mode='edge', pad_width=(0,0,0,0,0,0,0,1,0,1))
+    g_norm = g_norm.reshape(shape=[-1,0,0,0], reverse=True)
+    kernel_size = cfg.MODEL.GRAD_BLUR_KERNEL_SIZE
+    blur_kernel = mx.sym.ones([kernel_size, kernel_size])/(kernel_size**2)
+    blurred_gnorm = mx.sym.Convolution(data=data, num_filter=1, kernel=kernel_size, stride=1,
+                                weight=blur_kernel, dilate=1, no_bias=True,
+                                pad=1, name='blur_loss', workspace=256)
+    blurred_gnorm = blurred_gnorm.reshape([cfg.MODEL.OUT_LEN, -1,0,0,0], reverse=True, __layout__='TNCHW')
+    return blurred_gnorm
+
 def get_loss_weight_symbol(data, mask, seq_len):
     """
     data, mask, seq_len are symbols, pixel values [0,255] np.float32
@@ -57,6 +76,14 @@ def get_loss_weight_symbol(data, mask, seq_len):
         weights = mask
     temporal_mult = get_temporal_weight_symbol(seq_len)
     weights = mx.sym.broadcast_mul(weights, temporal_mult)
+    if cfg.MODEL.USE_GWEIGHTS:
+        gnorm = get_gradient_norm_symbold(data)
+        bwg = cfg.MODEL.BALANCING_WEIGHTS_GRADIENT
+        tg = cfg.MODEL.THRESHOLD_GRADIENT
+        g_weights = mx.sym.ones_like(data) * bwg[0]
+        for i, threshold in enumerate(tg):
+            g_weights = g_weights + (bwg[i+1] - bwg[i]) * (data >= tg[i])
+        weights = weights*g_weights
     return weights
 
 
