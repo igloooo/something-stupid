@@ -110,7 +110,7 @@ __C.HKO.EVALUATION.CENTRAL_REGION = (120, 120, 360, 360)
 
 __C.SZO = edict()
 __C.SZO.DATA = edict()
-__C.SZO.DATA.SIZE = 500
+__C.SZO.DATA.SIZE = 501
 __C.SZO.DATA.TOTAL_LEN = 61
 __C.SZO.DATA.IMAGE_CHANNEL = 2
 
@@ -167,7 +167,6 @@ __C.MODEL.IN_LEN = 30               # Size of the input
 __C.MODEL.OUT_LEN = 30             # Size of the output
 __C.MODEL.OUT_TYPE = "direct"      # Can be "direct", or "DFN"
 __C.MODEL.NORMAL_LOSS_GLOBAL_SCALE = 0.00005
-__C.MODEL.USE_BALANCED_LOSS = True
 __C.MODEL.TEMPORAL_WEIGHT_TYPE = "same"  # Can be "same", "linear" or "exponential"
 __C.MODEL.TEMPORAL_WEIGHT_UPPER = 5      # Only applicable when temporal_weights_type is "linear" or "exponential"
                                          # If linear
@@ -182,6 +181,14 @@ __C.MODEL.GAN_G_LAMBDA = 0.2
 __C.MODEL.GAN_D_LAMBDA = 0.2
 __C.MODEL.EXTEND_TO_FULL_OUTLEN = False
 
+__C.MODEL.PROBLEM_FORM = 'regression'  # 'regression' or 'classification'
+__C.MODEL.BINS = list(range(0,80,5))  # under problem form 'classification'
+__C.MODEL.BIN_WEIGHTS = [1 for i in range(len(__C.MODEL.BINS))]
+__C.MODEL.TARGET_TRAIN_SIZE = 167
+__C.MODEL.CE_EPSILON = 0.0001
+if __C.MODEL.PROBLEM_FORM == 'classification':
+    assert __C.MODEL.GAN_G_LAMBDA == 0.0, 'gan is not available under classification mode'
+# the following is only available under problem form: regression
 __C.MODEL.DATA_MODE = 'rescaled'  # 'rescaled' or 'original'
 __C.MODEL.BALANCE_FACTOR = 0.15  # under 'original' mode
 # the following two don't have to be the same with SZO.EVALUATION._
@@ -190,7 +197,7 @@ __C.MODEL.BALANCING_WEIGHTS = (1, 2, 4, 7, 11)  #(1, 1, 2, 5, 10, 30)  # The cor
 __C.MODEL.USE_GWEIGHTS = False
 __C.MODEL.THRESHOLD_GRADIENT = (1,)
 __C.MODEL.BALANCING_WEIGHTS_GRADIENT = (1,1)
-__C.MODEL.GRAD_BLUR_KERNEL_SIZE = (10，10)
+__C.MODEL.GRAD_BLUR_KERNEL_SIZE = (10,10)
 __C.MODEL.DISPLAY_EPSILON = 3.0  # under 'rescaled mode'
 
 __C.MODEL.TRAJRNN = edict()
@@ -261,7 +268,7 @@ __C.MODEL.TRAIN.GAMMA1 = 0.9   # Used in RMSProp
 __C.MODEL.TRAIN.BETA1 = 0.5    # When using ADAM, momentum is called beta1
 __C.MODEL.TRAIN.EPS = 1E-8
 __C.MODEL.TRAIN.MIN_LR = 1E-6
-__C.MODEL.TRAIN.GRAD_CLIP = 50.0
+__C.MODEL.TRAIN.GRAD_CLIP = 10.0
 __C.MODEL.TRAIN.GRAD_CLIP_DIS = 1.0
 __C.MODEL.TRAIN.WD = 0
 __C.MODEL.TRAIN.MAX_ITER = 180000
@@ -277,8 +284,8 @@ __C.MODEL.TRAIN.LR_DECAY_ITER_DIS = 800
 __C.MODEL.TRAIN.LR_DECAY_FACTOR_DIS = 0.7
 __C.MODEL.TRAIN.OPTIMIZER_DIS = 'rmsprop'
 
-__C.MODEL.DRAW_EVERY = 100
-__C.MODEL.DISPLAY_EVERY = 100
+__C.MODEL.DRAW_EVERY = 1000
+__C.MODEL.DISPLAY_EVERY = 250
 
 __C.MODEL.TEST = edict()
 __C.MODEL.TEST.FINETUNE = True

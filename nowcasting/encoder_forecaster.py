@@ -167,6 +167,7 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
 
     def stack_rnn_forecast(self, block_state_list, last_frame):
         CONFIG = cfg.MODEL.ENCODER_FORECASTER
+        output_chans = len(cfg.MODEL.BINS) if cfg.MODEL.PROBLEM_FORM=="classification" else 1
         block_state_list = [self._forecaster_rnn_blocks[i].to_split(block_state_list[i])
                             for i in range(len(self._forecaster_rnn_blocks))]
         rnn_block_num = len(CONFIG.RNN_BLOCKS.NUM_FILTER)
@@ -234,24 +235,41 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
                                     num_filter=CONFIG.LAST_DECONV1[0],
                                     kernel=(3, 3), stride=(1, 1), pad=(1, 1),
                                     act_type=cfg.MODEL.CNN_ACT_TYPE, name="conv_final")
+            #if cfg.MODEL.PROBLEM_FORM == 'regression':
             pred = conv2d(data=conv_final,
-                          num_filter=1, kernel=(1, 1), name="out")
-
+                          num_filter=output_chans, kernel=(1, 1), name="out")
+            '''
+            elif cfg.MODEL.PROBLEM_FORM == 'classification':
+                pred = conv2d_act(data=conv_final, 
+                                num_filter = output_chans,
+                                kernel=(1,1), stride=(1,1), pad=(0,0),
+                                act_type='sigmoid',name='out')
+            else:
+                raise NotImplementedError
+            '''
         else:
             raise NotImplementedError
         #print(pred.infer_shape(fbrnn1_begin_state_h=(2, 64, 83, 83),fbrnn2_begin_state_h=(2, 192, 41, 41),fbrnn3_begin_state_h=(2, 192, 20, 20)))
+        
+        if cfg.MODEL.PROBLEM_FORM == 'regression':
+            height = self._height
+            width = self._width
+        elif cfg.MODEL.PROBLEM_FORM == 'classification':
+            height = cfg.MODEL.TARGET_TRAIN_SIZE
+            width = cfg.MODEL.TARGET_TRAIN_SIZE
+        else:
+            raise NotImplementedError
         pred = mx.sym.Reshape(pred,
                               shape=(self._out_seq_len, self._batch_size,
-                                     1, self._height, self._width),
+                                     output_chans, height, width),
                               __layout__="TNCHW")
-        #print(pred.infer_shape(fbrnn1_begin_state_h=(2, 64, 83, 83),fbrnn2_begin_state_h=(2, 192, 41, 41),fbrnn3_begin_state_h=(2, 192, 20, 20)))
         pred = pred.transpose([1,0,2,3,4])
-        pred = pred.reshape([self._batch_size, self._out_seq_len, 1, self._height, self._width])
+        pred = pred.reshape([self._batch_size, self._out_seq_len, output_chans, height, width])
         pred = pred.transpose([1,0,2,3,4])
         # for safety
         pred = mx.sym.Reshape(pred,
                               shape=(self._out_seq_len, self._batch_size,
-                                     1, self._height, self._width),
+                                     output_chans, height, width),
                               __layout__="TNCHW")
         
 
@@ -344,20 +362,30 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
 
     def loss_data_desc(self):
         ret = list()
+        if cfg.MODEL.PROBLEM_FORM == 'classification':
+            output_chans = len(cfg.MODEL.BINS)
+            height = cfg.MODEL.TARGET_TRAIN_SIZE
+            width = cfg.MODEL.TARGET_TRAIN_SIZE
+        else:
+            output_chans = 1
+            height = self._height
+            width = self._width
         ret.append(mx.io.DataDesc(name='pred',
                                   shape=(self._out_seq_len,
                                          self._ctx_num * self._batch_size,
-                                         1,
-                                         self._height,
-                                         self._width),
+                                         output_chans,
+                                         height,
+                                         width),
                                   layout="TNCHW"))
-        ret.append(mx.io.DataDesc(name='discrim_out',
-                                shape=self.discrim_out_info()['shape'],
-                                layout=self.discrim_out_info()['layout']))
+        if cfg.MODEL.PROBLEM_FORM == 'regression' and cfg.MODEL.GAN_G_LAMBDA > 0.0:
+            ret.append(mx.io.DataDesc(name='discrim_out',
+                                    shape=self.discrim_out_info()['shape'],
+                                    layout=self.discrim_out_info()['layout']))
         return ret
 
     def loss_label_desc(self):
         ret = list()
+        # target channel is still 1 under classification mode. it will be transformed into onehot labels in the loss net
         ret.append(mx.io.DataDesc(name='target',
                                   shape=(self._out_seq_len,
                                          self._ctx_num * self._batch_size,
@@ -415,7 +443,8 @@ class EncoderForecasterBaseFactory(PredictionBaseFactory):
                 a['layout'] = "TNCHW"
         return a
 
-def init_optimizer_using_cfg(net, for_finetune, lr=cfg.MODEL.TRAIN.LR, min_lr=cfg.MODEL.TRAIN.MIN_LR, lr_decay_iter=cfg.MODEL.TRAIN.LR_DECAY_ITER,  lr_decay_factor=cfg.MODEL.TRAIN.LR_DECAY_FACTOR, optimizer_type=None):
+def init_optimizer_using_cfg(net, for_finetune, lr=cfg.MODEL.TRAIN.LR, min_lr=cfg.MODEL.TRAIN.MIN_LR, 
+    lr_decay_iter=cfg.MODEL.TRAIN.LR_DECAY_ITER,  lr_decay_factor=cfg.MODEL.TRAIN.LR_DECAY_FACTOR, optimizer_type=None):
     if optimizer_type is None:
         optimizer_type = cfg.MODEL.TRAIN.OPTIMIZER.lower()
     if not for_finetune:
@@ -543,36 +572,40 @@ def encoder_forecaster_build_networks(factory, context,
     if shared_loss_net is None:
         loss_net.init_params()
     
-    discrim_net = MyModule(factory.discrim_sym(),
-                        data_names=[ele.name for ele in
-                                    factory.discrim_data_desc()],
-                        label_names=[],
-                        context=context,
-                        name="discrim_net")
-    discrim_net.bind(data_shapes=factory.discrim_data_desc(),
-                    label_shapes=None,
-                    inputs_need_grad=True,
-                    shared_module=None)
-    discrim_net.init_params(mx.init.MSRAPrelu(slope=0.2))
-    init_optimizer_using_cfg(discrim_net, for_finetune=for_finetune,
-                            lr=cfg.MODEL.TRAIN.LR_DIS,
-                            min_lr=cfg.MODEL.TRAIN.MIN_LR_DIS,
-                            lr_decay_iter=cfg.MODEL.TRAIN.LR_DECAY_ITER_DIS, 
-                            lr_decay_factor=cfg.MODEL.TRAIN.LR_DECAY_FACTOR_DIS,
-                            optimizer_type=cfg.MODEL.TRAIN.OPTIMIZER_DIS.lower())
+    if cfg.MODEL.PROBLEM_FORM == 'regression' and (cfg.MODEL.GAN_G_LAMBDA > 0):
+        discrim_net = MyModule(factory.discrim_sym(),
+                            data_names=[ele.name for ele in
+                                        factory.discrim_data_desc()],
+                            label_names=[],
+                            context=context,
+                            name="discrim_net")
+        discrim_net.bind(data_shapes=factory.discrim_data_desc(),
+                        label_shapes=None,
+                        inputs_need_grad=True,
+                        shared_module=None)
+        discrim_net.init_params(mx.init.MSRAPrelu(slope=0.2))
+        init_optimizer_using_cfg(discrim_net, for_finetune=for_finetune,
+                                lr=cfg.MODEL.TRAIN.LR_DIS,
+                                min_lr=cfg.MODEL.TRAIN.MIN_LR_DIS,
+                                lr_decay_iter=cfg.MODEL.TRAIN.LR_DECAY_ITER_DIS, 
+                                lr_decay_factor=cfg.MODEL.TRAIN.LR_DECAY_FACTOR_DIS,
+                                optimizer_type=cfg.MODEL.TRAIN.OPTIMIZER_DIS.lower())
 
-    loss_D_net = MyModule(factory.loss_D_sym(),
-                        data_names=[ele.name for ele in
-                                    factory.loss_D_data_desc()],
-                        label_names=[ele.name for ele in
-                                     factory.loss_D_label_desc()],
-                        context=context,
-                        name="loss_D_net")
-    loss_D_net.bind(data_shapes=factory.loss_D_data_desc(),
-                    label_shapes=factory.loss_D_label_desc(),
-                    inputs_need_grad=True,
-                    shared_module=None)
-    loss_D_net.init_params()
+        loss_D_net = MyModule(factory.loss_D_sym(),
+                            data_names=[ele.name for ele in
+                                        factory.loss_D_data_desc()],
+                            label_names=[ele.name for ele in
+                                        factory.loss_D_label_desc()],
+                            context=context,
+                            name="loss_D_net")
+        loss_D_net.bind(data_shapes=factory.loss_D_data_desc(),
+                        label_shapes=factory.loss_D_label_desc(),
+                        inputs_need_grad=True,
+                        shared_module=None)
+        loss_D_net.init_params()
+    else:
+        discrim_net = None
+        loss_D_net = None
 
     return encoder_net, forecaster_net, loss_net, discrim_net, loss_D_net
 
@@ -633,6 +666,7 @@ def train_step(batch_size, encoder_net, forecaster_net,
     init_states: EncoderForecasterStates
     loss_dict: dict
     """
+    use_gan = (cfg.MODEL.PROBLEM_FORM == 'regression') and (cfg.MODEL.GAN_G_LAMDA > 0.0)
     # Forward Encoder
     encoder_net.forward(is_train=True,
                         data_batch=mx.io.DataBatch(data=[data_nd] + init_states.get_encoder_states()))
@@ -654,24 +688,27 @@ def train_step(batch_size, encoder_net, forecaster_net,
     forecaster_output = forecaster_net.get_outputs()
     pred_nd = forecaster_output[0]
 
-    if cfg.MODEL.GAN_G_LAMBDA > 0:
+    if use_gan:
         buffers['fake'].extend(pred_nd.split(axis=1, num_outputs=batch_size))
         buffers['true'].extend(gt_nd.split(axis=1, num_outputs=batch_size))
     
-    if cfg.MODEL.GAN_G_LAMBDA > 0:
+    if use_gan:
         discrim_net.forward(is_train=True,
                         data_batch=mx.io.DataBatch(data=[pred_nd]))
         discrim_output = discrim_net.get_outputs()[0]
+        loss_net.forward_backward(data_batch=mx.io.DataBatch(data=[pred_nd, discrim_output],
+                                                        label=[gt_nd, mask_nd]))
     else:
-        discrim_output = mx.nd.zeros(factory.discrim_out_info()['shape'])
+        # use a placeholder
+        loss_net.forward_backward(data_batch=mx.io.DataBatch(data=[pred_nd],
+                                                        label=[gt_nd, mask_nd]))
 
     # Calculate the gradient of the loss functions
-    loss_net.forward_backward(data_batch=mx.io.DataBatch(data=[pred_nd, discrim_output],
-                                                        label=[gt_nd, mask_nd]))
+    
 
     pred_grad_ordinary = loss_net.get_input_grads()[0]
     
-    if cfg.MODEL.GAN_G_LAMBDA > 0:
+    if use_gan:
         discrim_net.backward(out_grads=[loss_net.get_input_grads()[1]])
         pred_grad_gan = discrim_net.get_input_grads()[0]
         grad_ratio = pred_grad_gan.norm().asscalar() / pred_grad_ordinary.norm().asscalar()
@@ -684,7 +721,7 @@ def train_step(batch_size, encoder_net, forecaster_net,
     loss_dict = loss_net.get_output_dict()
     for k in loss_dict:
         loss_dict[k] = nd.mean(loss_dict[k]).asscalar()
-    if cfg.MODEL.GAN_G_LAMBDA == 0:
+    if cfg.MODEL.PROBLEM_FORM == 'regression' and cfg.MODEL.GAN_G_LAMBDA == 0:
         del loss_dict['gan_output']
     # Backward Forecaster
     forecaster_net.backward(out_grads=[pred_grad])
@@ -699,13 +736,13 @@ def train_step(batch_size, encoder_net, forecaster_net,
     
     loss_str = ", ".join(["%s=%g" %(k, v) for k, v in loss_dict.items()])
     if iter_id is not None:
-        if cfg.MODEL.GAN_G_LAMBDA != 0:
+        if use_gan:
             logging.info("Iter:%d, %s, e_gnorm=%g, f_gnorm=%g, gan:other=%g"
                     %(iter_id, loss_str, encoder_grad_norm, forecaster_grad_norm, grad_ratio))
         else:
             logging.info("Iter:%d, %s, e_gnorm=%g, f_gnorm=%g"
                     %(iter_id, loss_str, encoder_grad_norm, forecaster_grad_norm))
-    if cfg.MODEL.GAN_G_LAMBDA == 0:
+    if not use_gan:
         return init_states, loss_dict, pred_nd, buffers
     # train the discriminator
     loss_dict['dis_output'] = 0.0

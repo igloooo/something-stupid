@@ -52,8 +52,7 @@ def get_loss_weight_symbol(data, mask, seq_len):
     data, mask, seq_len are symbols, pixel values [0,255] np.float32
     return weights have the same shape as data and mask, np.float32
     """
-    # use symbol here, since it's part of the network!!!
-    if cfg.MODEL.USE_BALANCED_LOSS:
+    if cfg.MODEL.PROBLEM_FORM == 'regression':
         if cfg.MODEL.DATA_MODE == 'rescaled':
             balancing_weights = cfg.MODEL.BALANCING_WEIGHTS
             weights = mx.sym.ones_like(data) * balancing_weights[0]
@@ -72,18 +71,27 @@ def get_loss_weight_symbol(data, mask, seq_len):
             weights = weights * mask
         else:
             raise NotImplementedError
+        if cfg.MODEL.USE_GWEIGHTS:
+            gnorm = get_gradient_norm_symbold(data)
+            bwg = cfg.MODEL.BALANCING_WEIGHTS_GRADIENT
+            tg = cfg.MODEL.THRESHOLD_GRADIENT
+            g_weights = mx.sym.ones_like(data) * bwg[0]
+            for i, threshold in enumerate(tg):
+                g_weights = g_weights + (bwg[i+1] - bwg[i]) * (data >= tg[i])
+            weights = weights*g_weights
+    elif cfg.MODEL.PROBLEM_FORM == 'classification':
+        # assume target along channel dimension is a one hot vector
+        for i in range(len(cfg.MODEL.BINS)):
+            if i==0:
+                weights = data.slice_axis(axis=2, begin=i, end=i+1) * cfg.MODEL.BIN_WEIGHTS[i]
+            else:
+                weights = weights + data.slice_axis(axis=2, begin=i, end=i+1) * cfg.MODEL.BIN_WEIGHTS[i]
+        weights = weights*mask
     else:
-        weights = mask
+        raise NotImplementedError
+
     temporal_mult = get_temporal_weight_symbol(seq_len)
     weights = mx.sym.broadcast_mul(weights, temporal_mult)
-    if cfg.MODEL.USE_GWEIGHTS:
-        gnorm = get_gradient_norm_symbold(data)
-        bwg = cfg.MODEL.BALANCING_WEIGHTS_GRADIENT
-        tg = cfg.MODEL.THRESHOLD_GRADIENT
-        g_weights = mx.sym.ones_like(data) * bwg[0]
-        for i, threshold in enumerate(tg):
-            g_weights = g_weights + (bwg[i+1] - bwg[i]) * (data >= tg[i])
-        weights = weights*g_weights
     return weights
 
 
@@ -213,52 +221,92 @@ class SZONowcastingFactory(EncoderForecasterBaseFactory):
             discrim_output Shape (batch_size,) if 3d discrim, (out_seq_len, batch_size,) if 2d discrim
         """
         self.reset_all()
-        weights = get_loss_weight_symbol(data=target, mask=mask, seq_len=self._out_seq_len)
-        mse = weighted_mse(pred=pred, gt=target, weight=weights)
-        mae = weighted_mae(pred=pred, gt=target, weight=weights)
-        gdl = masked_gdl_loss(pred=pred, gt=target, mask=mask)
-        avg_mse = mx.sym.mean(mse)
-        avg_mae = mx.sym.mean(mae)
-        avg_gdl = mx.sym.mean(gdl)
-        # gan loss is for a whole sequence, and isn't influenced by weights
-        if not cfg.MODEL.DISCRIMINATOR.USE_2D:
-            gan = mx.sym.abs(discrim_output - mx.sym.ones_like(discrim_output))
-        else:
-            gan = mx.sym.square(discrim_output - mx.sym.ones_like(discrim_output))
-            if cfg.MODEL.DISCRIMINATOR.PIXEL:
-                gan = mx.sym.mean(gan, axis=(2,3,4))
-            temporal_weights = get_temporal_weight_symbol(self._out_seq_len)
-            gan = mx.sym.broadcast_mul(mx.sym.sum(mx.sym.broadcast_mul(gan, temporal_weights), axis=0), 1/mx.sym.sum(temporal_weights))  # normalize to 0-1
-        avg_gan = mx.sym.mean(gan)  # average over batches and frames
-        
         global_grad_scale = cfg.MODEL.NORMAL_LOSS_GLOBAL_SCALE
-        if cfg.MODEL.L2_LAMBDA > 0:
-            avg_mse = mx.sym.MakeLoss(avg_mse,
-                                      grad_scale=global_grad_scale * cfg.MODEL.L2_LAMBDA,
-                                      name="mse")
+        if cfg.MODEL.PROBLEM_FORM == 'regression':
+            weights = get_loss_weight_symbol(data=target, mask=mask, seq_len=self._out_seq_len)
+            mse = weighted_mse(pred=pred, gt=target, weight=weights)
+            mae = weighted_mae(pred=pred, gt=target, weight=weights)
+            gdl = masked_gdl_loss(pred=pred, gt=target, mask=mask)
+            avg_mse = mx.sym.mean(mse)
+            avg_mae = mx.sym.mean(mae)
+            avg_gdl = mx.sym.mean(gdl)
+            # gan loss is for a whole sequence, and isn't influenced by weights
+            if not cfg.MODEL.DISCRIMINATOR.USE_2D:
+                gan = mx.sym.abs(discrim_output - mx.sym.ones_like(discrim_output))
+            else:
+                gan = mx.sym.square(discrim_output - mx.sym.ones_like(discrim_output))
+                if cfg.MODEL.DISCRIMINATOR.PIXEL:
+                    gan = mx.sym.mean(gan, axis=(2,3,4))
+                temporal_weights = get_temporal_weight_symbol(self._out_seq_len)
+                gan = mx.sym.broadcast_mul(mx.sym.sum(mx.sym.broadcast_mul(gan, temporal_weights), axis=0), 1/mx.sym.sum(temporal_weights))  # normalize to 0-1
+            avg_gan = mx.sym.mean(gan)  # average over batches and frames
+            
+            if cfg.MODEL.L2_LAMBDA > 0:
+                avg_mse = mx.sym.MakeLoss(avg_mse,
+                                        grad_scale=global_grad_scale * cfg.MODEL.L2_LAMBDA,
+                                        name="mse")
+            else:
+                avg_mse = mx.sym.BlockGrad(avg_mse, name="mse")
+            if cfg.MODEL.L1_LAMBDA > 0:
+                avg_mae = mx.sym.MakeLoss(avg_mae,
+                                        grad_scale=global_grad_scale * cfg.MODEL.L1_LAMBDA,
+                                        name="mae")
+            else:
+                avg_mae = mx.sym.BlockGrad(avg_mae, name="mae")
+            if cfg.MODEL.GDL_LAMBDA > 0:
+                avg_gdl = mx.sym.MakeLoss(avg_gdl,
+                                        grad_scale=global_grad_scale * cfg.MODEL.GDL_LAMBDA,
+                                        name="gdl")
+            else:
+                avg_gdl = mx.sym.BlockGrad(avg_gdl, name="gdl")       
+            if cfg.MODEL.GAN_G_LAMBDA > 0:
+                avg_gan = mx.sym.MakeLoss(avg_gan, 
+                                        grad_scale=global_grad_scale*cfg.MODEL.GAN_G_LAMBDA,
+                                        name='gan')
+            else:
+                avg_gan = mx.sym.BlockGrad(avg_gan, name='gan')
+            
+            loss = mx.sym.Group([avg_mse, avg_mae, avg_gdl, avg_gan])
+            return loss
+        elif cfg.MODEL.PROBLEM_FORM == 'classification':
+            scale = cfg.SZO.DATA.SIZE // cfg.MODEL.TARGET_TRAIN_SIZE
+            mask = mask.reshape([-1,0,0,0], reverse=True)
+            mask = mx.sym.Pooling(data=mask, kernel=(scale, scale), stride=(scale, scale), pool_type='max')
+            mask = mask.reshape([self._out_seq_len, self._batch_size, 0,0,0], reverse=True)
+            target = target.reshape([-1,0,0,0], reverse=True)
+            target = mx.sym.Pooling(data=target, kernel=(scale, scale), stride=(scale, scale), pool_type='max')
+            target = target.reshape([self._out_seq_len, self._batch_size, 0,0,0], reverse=True)
+            target_class_list = []
+            # generate classes graph from target sequence; note that the range of radar reflexity is 0-1
+            for i in range(len(cfg.MODEL.BINS)):
+                lower = cfg.MODEL.BINS[i]
+                if i < len(cfg.MODEL.BINS)-1:
+                    upper = cfg.MODEL.BINS[i+1]
+                else:
+                    upper = 1
+                target_class_list.append(((target>=lower)*(target<upper)))
+            target_class = mx.sym.concat(*target_class_list, dim=2)
+
+            pred = mx.sym.softmax(pred, axis=2)
+            
+            eps = cfg.MODEL.CE_EPSILON
+            ce_loss = -mx.sym.sum(target_class*mx.sym.log(pred+eps), axis=2).expand_dims(axis=2)
+            #pred = pred.transpose((0,1,3,4,2))
+            #pred = pred.reshape([-1,0], reverse=True)
+            #target_class = target_class.transpose((0,1,3,4,2))
+            #target_class = target_class.reshape([-1,0], reverse=True)
+            #ce_loss = ce_loss.reshape([self._out_seq_len, self._batch_size, self._height, self._width,0],
+            #                            __layout__='TNHWC')
+            #ce_loss = ce_loss.transpose((0,1,4,2,3))
+            ce_loss = ce_loss * get_loss_weight_symbol(target_class, mask, self._out_seq_len)
+            ce_loss = mx.sym.sum(ce_loss, axis=(2,3,4))
+            ce_loss = mx.sym.mean(ce_loss)
+            loss = mx.sym.MakeLoss(ce_loss, grad_scale=global_grad_scale, name='ce')
+            #log_pred = mx.sym.MakeLoss(mx.sym.min(pred), name='log_pred')
+            return loss  # mx.sym.Group([loss, log_pred])
         else:
-            avg_mse = mx.sym.BlockGrad(avg_mse, name="mse")
-        if cfg.MODEL.L1_LAMBDA > 0:
-            avg_mae = mx.sym.MakeLoss(avg_mae,
-                                      grad_scale=global_grad_scale * cfg.MODEL.L1_LAMBDA,
-                                      name="mae")
-        else:
-            avg_mae = mx.sym.BlockGrad(avg_mae, name="mae")
-        if cfg.MODEL.GDL_LAMBDA > 0:
-            avg_gdl = mx.sym.MakeLoss(avg_gdl,
-                                      grad_scale=global_grad_scale * cfg.MODEL.GDL_LAMBDA,
-                                      name="gdl")
-        else:
-            avg_gdl = mx.sym.BlockGrad(avg_gdl, name="gdl")       
-        if cfg.MODEL.GAN_G_LAMBDA > 0:
-            avg_gan = mx.sym.MakeLoss(avg_gan, 
-                                    grad_scale=global_grad_scale*cfg.MODEL.GAN_G_LAMBDA,
-                                    name='gan')
-        else:
-            avg_gan = mx.sym.BlockGrad(avg_gan, name='gan')
-        
-        loss = mx.sym.Group([avg_mse, avg_mae, avg_gdl, avg_gan])
-        return loss
+            raise NotImplementedError
+
 
     def loss_D_sym(self, 
                 discrim_output=mx.sym.Variable('discrim_out'), 

@@ -123,12 +123,14 @@ class SZOIterator:
             assert frames.shape[0] == self.in_len
 
         if cfg.MODEL.DATA_MODE == 'rescaled':
+            assert cfg.MODEL.ENCODER_FORECASTER.HAS_MASK == False
             if cfg.MODEL.OPTFLOW_AS_INPUT:
                 pass
             else:
                 frames = frames * (frames<255) * (255.0/80.0)
         elif cfg.MODEL.DATA_MODE == 'original':
             assert cfg.MODEL.ENCODER_FORECASTER.HAS_MASK == False
+            assert cfg.MODEL.PROBLEM_FORM != 'regression'
             pass
         else:
             raise NotImplementedError

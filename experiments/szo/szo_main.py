@@ -206,11 +206,31 @@ def synchronize_kvstore(module):
             module._kvstore.push(k, w[0].as_in_context(mx.cpu(0)))
         module._kvstore._set_updater(mx.optimizer.get_updater(module._optimizer))
 
+def from_class_to_image(pred_logit):
+    # get the index for predicted class
+    pred_class = mx.nd.argmax(pred_logit, axis=2)  
+    # transform into one hot form, shape TNHWC
+    pred_class = mx.nd.one_hot(pred_class, len(cfg.MODEL.BINS), dtype='float32')  
+    # class values into shape (1,1,1,1,classes)
+    class_values = mx.nd.array(cfg.MODEL.BINS)
+    for axis in range(4):
+        class_values = mx.nd.expand_dims(class_values, axis=0)
+    # get represent value for each class, condense into one image
+    pred_class = pred_class * class_values
+    pred = mx.nd.sum(pred_class, axis=4)
+    # transpose to TNCHW
+    pred = pred.transpose((0,1,4,2,3))
+    # upsample
+    out_size = cfg.SZO.DATA.SIZE
+    pred = mx.nd.BilinearResize2D(pred, out_size, out_size)
+    return pred
+
 def train(args):
     base_dir = get_base_dir(args)
     logging_config(folder=base_dir)
     save_cfg(dir_path=base_dir, source=cfg.MODEL)
 
+    use_gan = (cfg.MODEL.PROBLEM_FORM == 'regression') and (cfg.MODEL.GAN_G_LAMBDA > 0.0)
     if cfg.MODEL.FRAME_SKIP_OUT > 1:
         # here assume the target span the last 30 frames 
         iter_outlen = cfg.MODEL.OUT_LEN
@@ -238,6 +258,7 @@ def train(args):
                                           in_seq_len=cfg.MODEL.IN_LEN,
                                           out_seq_len=model_outlen,  # model still generate cfg.MODEL.OUT_LEN number of outputs at a time
                                           frame_stack=cfg.MODEL.FRAME_STACK)
+    # discrim_net, loss_D_net will be None if use_gan = False
     encoder_net, forecaster_net, loss_net, discrim_net, loss_D_net = \
         encoder_forecaster_build_networks(
             factory=szo_nowcasting,
@@ -245,12 +266,18 @@ def train(args):
     encoder_net.summary()
     forecaster_net.summary()
     loss_net.summary()
-    discrim_net.summary()
-    loss_D_net.summary()
-    if cfg.MODEL.GAN_G_LAMBDA > 0:
+    if use_gan:
+        discrim_net.summary()
+        loss_D_net.summary()
+    if use_gan:
         loss_types = ('mse','gdl','gan','dis')
     else:
-        loss_types = ('mse', 'gdl')
+        if cfg.MODEL.PROBLEM_FORM == 'regression':
+            loss_types = ('mse', 'gdl')
+        elif cfg.MODEL.PROBLEM_FORM == 'classification':
+            loss_types = ('ce',)
+        else:
+            raise NotImplementedError
     # try to load checkpoint
     if args.resume:
         start_iter_id = latest_iter_id(base_dir)
@@ -259,7 +286,7 @@ def train(args):
         if not args.resume_param_only:
             encoder_net.load_optimizer_states(os.path.join(base_dir, 'encoder_net'+'-%04d.states'%(start_iter_id)))
             forecaster_net.load_optimizer_states(os.path.join(base_dir, 'forecaster_net'+'-%04d.states'%(start_iter_id)))
-        if cfg.MODEL.GAN_G_LAMBDA > 0:
+        if use_gan:
             discrim_net.load_params(os.path.join(base_dir, 'discrim_net'+'-%04d.params'%(start_iter_id)))
             if not args.resume_param_only:
                 discrim_net.load_optimizer_states(os.path.join(base_dir, 'discrim_net'+'-%04d.states'%(start_iter_id)))
@@ -275,11 +302,17 @@ def train(args):
             valid_loss_dicts = pickle.load(f)
         for dicts in (train_loss_dicts, valid_loss_dicts):
             keys_to_delete = []
+            keys_to_add = []
+            key_len = 0
             for k in dicts.keys():
+                key_len = len(dicts[k])
                 if k not in loss_types:
                     keys_to_delete.append(k)
             for k in keys_to_delete:
                 del dicts[k]
+            for k in loss_types:
+                if k not in dicts.keys():
+                    dicts[k] = [0] * key_len
     else:
         train_loss_dicts = {}
         valid_loss_dicts = {}
@@ -374,7 +407,8 @@ def train(args):
             target_nd_d = target_nd_d.expand_dims(axis=2)
             states.reset_all()
             pred_nd_d = get_prediction(data_nd_d, states, encoder_net, forecaster_net)
-
+            if cfg.MODEL.PROBLEM_FORM == 'classification':
+                pred_nd_d = from_class_to_image(pred_nd_d)
             display_path1 = os.path.join(base_dir, 'display_'+str(iter_id))
             display_path2 = os.path.join(base_dir, 'display_'+str(iter_id)+'_')
             if not os.path.exists(display_path1):
@@ -417,17 +451,17 @@ def valid_step(batch_size, encoder_net, forecaster_net,
     '''
     init_states.reset_all()
     pred_nd = get_prediction(data_nd, init_states, encoder_net, forecaster_net)
-    
-    if cfg.MODEL.GAN_G_LAMBDA > 0:
+    use_gan = (cfg.MODEL.PROBLEM_FORM == 'regression') and (cfg.MODEL.GAN_G_LAMBDA > 0)
+    if use_gan:
         discrim_net.forward(data_batch=mx.io.DataBatch(data=[pred_nd]))
         discrim_output = discrim_net.get_outputs()[0]
+        loss_net.forward(data_batch=mx.io.DataBatch(data=[pred_nd, discrim_output],
+                                                label=[gt_nd, mask_nd]))
     else:
-        discrim_output = mx.nd.zeros(factory.discrim_out_info()['shape'])
-
-    loss_net.forward(data_batch=mx.io.DataBatch(data=[pred_nd, discrim_output],
+        loss_net.forward(data_batch=mx.io.DataBatch(data=[pred_nd],
                                                 label=[gt_nd, mask_nd]))
 
-    if cfg.MODEL.GAN_G_LAMBDA > 0:                                         
+    if use_gan:                                         
         loss_D_net.forward(data_batch=mx.io.DataBatch(data=[discrim_output],
                                                 label=[mx.nd.zeros_like(discrim_output)]))
         discrim_loss = mx.nd.mean(loss_D_net.get_outputs()[0]).asscalar()
@@ -470,6 +504,7 @@ def predict(args, num_samples, save_path=None, mode='display', extend='none'):
     base_dir = get_base_dir(args)
     chan = cfg.SZO.DATA.IMAGE_CHANNEL if cfg.MODEL.OPTFLOW_AS_INPUT else 0
     if extend == 'recursive':
+        assert not cfg.MODEL.PROBLEM_FORM == 'classification', 'recursive generation is not allowed under classification mode'
         assert (cfg.MODEL.FRAME_SKIP_IN) == 1 and (cfg.MODEL.FRAME_SKIP_OUT==1), '"extend" should be "none" when frame_skip is not 1'
         iter_outlen = 30
         model_outlen = cfg.MODEL.OUT_LEN
@@ -526,7 +561,9 @@ def predict(args, num_samples, save_path=None, mode='display', extend='none'):
             pred_nd_d = mx.nd.concat(pred_nd_d1[:30-cfg.MODEL.OUT_LEN,:,:,:,:],pred_nd_d2, dim=0)
         else:
             pred_nd_d = pred_nd_d1
-          
+        if cfg.MODEL.PROBLEM_FORM == 'classification':
+            pred_nd_d = from_class_to_image(pred_nd_d)
+        
         data_nd_d = (data_nd_d*255.0).clip(0, 255.0)
         target_nd_d = (target_nd_d*255.0).clip(0, 255.0) if not no_gt else None
         pred_nd_d = (pred_nd_d*255.0).clip(0, 255.0)
@@ -631,7 +668,8 @@ def test(args, batches, checkpoint_id=None, on_train=False):
         target_nd = frame_dat[cfg.MODEL.IN_LEN:,:,chan,:,:] / 255.0
         target_nd = target_nd.expand_dims(axis=2)
         pred_nd = get_prediction(data_nd, states, encoder_net, forecaster_net)
-
+        if cfg.MODEL.PROBLEM_FORM == 'classification':
+            pred_nd = from_class_to_image(pred_nd)
         # generate mask from target_nd
         if cfg.MODEL.ENCODER_FORECASTER.HAS_MASK:
             target_nd = target_nd * (255.0/80.0)
