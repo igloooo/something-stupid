@@ -273,6 +273,8 @@ class SZONowcastingFactory(EncoderForecasterBaseFactory):
             mask = mask.reshape([-1,0,0,0], reverse=True)
             mask = mx.sym.Pooling(data=mask, kernel=(scale, scale), stride=(scale, scale), pool_type='max')
             mask = mask.reshape([self._out_seq_len, self._batch_size, 0,0,0], reverse=True)
+            # input in range [0,1] representing radar reflectivity in range [0,80]
+            target = target * 80.0
             target = target.reshape([-1,0,0,0], reverse=True)
             target = mx.sym.Pooling(data=target, kernel=(scale, scale), stride=(scale, scale), pool_type='max')
             target = target.reshape([self._out_seq_len, self._batch_size, 0,0,0], reverse=True)

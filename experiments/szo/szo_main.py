@@ -177,15 +177,21 @@ def save_prediction(data_nd, target_nd, pred_nd, path, default_as_0=False, mode=
         raise NotImplementedError
 
 def save_pred_image_sequence(pred_np, prefix):
-    begin_index = cfg.SZO.DATA.TOTAL_LEN - (pred_np.shape[0]-1)*cfg.MODEL.FRAME_SKIP_OUT - 1
-    for i in range(pred_np.shape[0]): 
-        print('writing',prefix+"_f%03d"%(begin_index+i*cfg.MODEL.FRAME_SKIP_OUT)+".png")
-        cv2.imwrite(prefix+"_f%03d"%(begin_index+i*cfg.MODEL.FRAME_SKIP_OUT)+".png", pred_np[i])
+    #begin_index = cfg.SZO.DATA.TOTAL_LEN - (pred_np.shape[0]-1)*cfg.MODEL.FRAME_SKIP_OUT - 1
+    #for i in range(pred_np.shape[0]): 
+    #    print('writing',prefix+"_f%03d"%(begin_index+i*cfg.MODEL.FRAME_SKIP_OUT)+".png")
+    #    cv2.imwrite(prefix+"_f%03d"%(begin_index+i*cfg.MODEL.FRAME_SKIP_OUT)+".png", pred_np[i])
+    for i in range(pred_np.shape[0]):
+        print('writing',prefix+"_f%03d"%(i+1)+".png")
+        cv2.imwrite(prefix+"_f%03d"%(i+1)+".png", pred_np[i])
 
 def save_gt_image_sequence(gt_np, prefix):
-    begin_index = cfg.SZO.DATA.TOTAL_LEN - (gt_np.shape[0]-1)*cfg.MODEL.FRAME_SKIP_OUT - 1
-    for i in range(gt_np.shape[0]): 
-        cv2.imwrite(prefix+"_%03d"%(begin_index+i*cfg.MODEL.FRAME_SKIP_OUT)+".png", gt_np[i])
+    #begin_index = cfg.SZO.DATA.TOTAL_LEN - (gt_np.shape[0]-1)*cfg.MODEL.FRAME_SKIP_OUT - 1
+    #for i in range(gt_np.shape[0]): 
+    #    cv2.imwrite(prefix+"_%03d"%(begin_index+i*cfg.MODEL.FRAME_SKIP_OUT)+".png", gt_np[i])
+    for i in range(gt_np.shape[0]):
+        print('writing',prefix+"_%03d"%(i+1)+".png")
+        cv2.imwrite(prefix+"_%03d"%(i+1)+".png", gt_np[i])
 
 def plot_loss_curve(path, losses):
     plt.figure()
@@ -212,17 +218,23 @@ def from_class_to_image(pred_logit):
     # transform into one hot form, shape TNHWC
     pred_class = mx.nd.one_hot(pred_class, len(cfg.MODEL.BINS), dtype='float32')  
     # class values into shape (1,1,1,1,classes)
-    class_values = mx.nd.array(cfg.MODEL.BINS)
+    bins = cfg.MODEL.BINS + [80.0]
+    class_values = [(bins[i]+bins[i+1])/2 for i in range(len(bins)-1)]
+    class_values = mx.nd.array(class_values, ctx=args.ctx[0])
     for axis in range(4):
         class_values = mx.nd.expand_dims(class_values, axis=0)
     # get represent value for each class, condense into one image
     pred_class = pred_class * class_values
     pred = mx.nd.sum(pred_class, axis=4)
     # transpose to TNCHW
-    pred = pred.transpose((0,1,4,2,3))
+    pred = pred.expand_dims(axis=2)
     # upsample
-    out_size = cfg.SZO.DATA.SIZE
-    pred = mx.nd.BilinearResize2D(pred, out_size, out_size)
+    #scale = cfg.SZO.DATA.SIZE // cfg.MODEL.TARGET_TRAIN_SIZE
+    #pred = mx.nd.UpSampling(pred, scale=scale, num_filter=1, sample_type='bilinear')
+    size = cfg.SZO.DATA.SIZE
+    pred = pred.reshape([-1,0,0,0], reverse=True)
+    pred = mx.nd.contrib.BilinearResize2D(pred, size, size)
+    pred = pred.reshape([pred_logit.shape[0], pred_logit.shape[1],0,0,0], reverse=True) / 80.0
     return pred
 
 def train(args):
@@ -283,15 +295,17 @@ def train(args):
         start_iter_id = latest_iter_id(base_dir)
         encoder_net.load_params(os.path.join(base_dir, 'encoder_net'+'-%04d.params'%(start_iter_id)))
         forecaster_net.load_params(os.path.join(base_dir, 'forecaster_net'+'-%04d.params'%(start_iter_id)))
+        synchronize_kvstore(encoder_net)
+        synchronize_kvstore(forecaster_net)
         if not args.resume_param_only:
             encoder_net.load_optimizer_states(os.path.join(base_dir, 'encoder_net'+'-%04d.states'%(start_iter_id)))
             forecaster_net.load_optimizer_states(os.path.join(base_dir, 'forecaster_net'+'-%04d.states'%(start_iter_id)))
         if use_gan:
             discrim_net.load_params(os.path.join(base_dir, 'discrim_net'+'-%04d.params'%(start_iter_id)))
+            synchronize_kvstore(discrim_net)
             if not args.resume_param_only:
                 discrim_net.load_optimizer_states(os.path.join(base_dir, 'discrim_net'+'-%04d.states'%(start_iter_id)))
-        for module in (encoder_net, forecaster_net, discrim_net):
-            synchronize_kvstore(module)
+            synchronize_kvstore(discrim_net)
     else:
         start_iter_id = -1
 
@@ -600,9 +614,9 @@ def predict(args, num_samples, save_path=None, mode='display', extend='none'):
             folder_name = folder_names[0][-1]
 
             if not no_gt:
-                save_prediction(data_nd_d[:,0,chan,:,:], target_nd_d[:,0,0,:,:], pred_nd_d[:,0,0,:,:], None, default_as_0=False, mode='save', folder_name=folder_name, gt_path=gt_path, pred_path=pred_path)
+                save_prediction(mx.nd.zeros([1]), target_nd_d[::5,0,0,:,:], pred_nd_d[::5,0,0,:,:], None, default_as_0=False, mode='save', folder_name=folder_name, gt_path=gt_path, pred_path=pred_path)
             else:
-                save_prediction(data_nd_d[:,0,chan,:,:], None, pred_nd_d[:,0,0,:,:], None, default_as_0=False, mode='save', folder_name=folder_name, gt_path=gt_path, pred_path=pred_path)
+                save_prediction(mx.nd.zeros([1]), None, pred_nd_d[::5,0,0,:,:], None, default_as_0=False, mode='save', folder_name=folder_name, gt_path=gt_path, pred_path=pred_path)
 
         else:
             raise NotImplementedError
@@ -620,7 +634,6 @@ def test(args, batches, checkpoint_id=None, on_train=False):
     evaluator = SZOEvaluation(6, False)
     base_dir = get_base_dir(args)
     logging.basicConfig(level=logging.INFO)
-    save_cfg(dir_path=base_dir, source=cfg.MODEL)
     if on_train:
         szo_iter = SZOIterator(rec_paths=cfg.SZO_TRAIN_DATA_PATHS,
                                 in_len=cfg.MODEL.IN_LEN,

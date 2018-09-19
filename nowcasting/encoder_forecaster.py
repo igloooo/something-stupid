@@ -687,7 +687,6 @@ def train_step(batch_size, encoder_net, forecaster_net,
                             data_batch=mx.io.DataBatch(data=init_states.get_forecaster_states()))
     forecaster_output = forecaster_net.get_outputs()
     pred_nd = forecaster_output[0]
-
     if use_gan:
         buffers['fake'].extend(pred_nd.split(axis=1, num_outputs=batch_size))
         buffers['true'].extend(gt_nd.split(axis=1, num_outputs=batch_size))
