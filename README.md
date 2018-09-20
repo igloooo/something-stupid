@@ -1,1 +1,1 @@
-An adaptation of https://github.com/sxjscience/HKO-7 for performing weather forecasting tasks in SRAD2018
+just for fun
